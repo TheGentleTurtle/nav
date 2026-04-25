@@ -1,10 +1,6 @@
 # nav
 
-A tiny terminal file navigator that **actually changes your directory**. Browse folders in a full-screen TUI, press enter, and you're there — no copying paths, no typing `cd`.
-
-## Why nav?
-
-Most file browsers just *show* you files. `nav` actually **`cd`s into the folder you pick**. It uses a lightweight shell wrapper so pressing enter drops you right into the directory you selected.
+A tiny terminal file navigator. Browse folders with vim keys, press enter, and your shell `cd`s into it.
 
 ## Install
 
@@ -57,13 +53,6 @@ nav() {
 ```
 
 Then restart your shell or run `source ~/.zshrc`.
-
-## How it works
-
-1. Run `nav` — a full-screen file browser opens.
-2. Navigate with vim keys or arrow keys.
-3. Press `Enter` on a folder — nav exits and your shell `cd`s into it.
-4. Press `q` to quit without changing directory.
 
 ## Commands
 

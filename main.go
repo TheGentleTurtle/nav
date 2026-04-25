@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const version = "1.0.0"
+const version = "1.0.1"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -519,14 +519,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up":
 				if m.cursor > 0 {
 					m.cursor--
-					m.fixOffset()
+				} else {
+					m.cursor = m.totalItems() - 1
 				}
+				m.fixOffset()
 				return m, nil
 			case "down":
 				if m.cursor < m.totalItems()-1 {
 					m.cursor++
-					m.fixOffset()
+				} else {
+					m.cursor = 0
 				}
+				m.fixOffset()
 				return m, nil
 			case "right":
 				if len(m.entries) > 0 && m.cursor < len(m.entries) {
@@ -560,13 +564,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
-				m.fixOffset()
+			} else {
+				m.cursor = m.totalItems() - 1
 			}
+			m.fixOffset()
 		case "j", "down":
 			if m.cursor < m.totalItems()-1 {
 				m.cursor++
-				m.fixOffset()
+			} else {
+				m.cursor = 0
 			}
+			m.fixOffset()
 		case "l", "right":
 			if len(m.entries) > 0 {
 				entry := m.entries[m.cursor]
