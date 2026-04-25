@@ -1,0 +1,9 @@
+nav
+.DS_Store
+Project README.md
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
+docs/
+scripts/
