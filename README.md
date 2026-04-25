@@ -83,3 +83,9 @@ nav --uninstall # remove wrapper and uninstall Homebrew formula
 ## License
 
 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) — free for personal use, no commercial use.
+
+---
+
+If you like nav, consider supporting development:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L3L51YERHE)
