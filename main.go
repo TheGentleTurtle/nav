@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.1"
+const version = "1.1.2"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -1188,7 +1188,7 @@ func (m model) renderTree() string {
 		b.WriteString("\n")
 	}
 
-	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  left/right depth | f files | . hidden | i ignored | m format | c copy | esc back",
+	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ←→ depth | f files | . hidden | i ignored | m format | c copy | esc back",
 		m.treeCount))
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
@@ -1234,7 +1234,7 @@ func helpSections() []helpSection {
 			{"q", "Quit"},
 		}},
 		{"Tree mode", []helpEntry{
-			{"left/right", "Decrease/increase depth (0 -> infinite -> 0)"},
+			{"←→", "Decrease/increase depth (0 → ∞ → 0)"},
 			{"f", "Toggle files vs folders only"},
 			{".", "Toggle hidden files"},
 			{"i", "Toggle skip ignored (node_modules, .git, ...)"},
@@ -1244,16 +1244,16 @@ func helpSections() []helpSection {
 		}},
 		{"Search mode", []helpEntry{
 			{"type", "Fuzzy filter files by name"},
-			{"up/down", "Move cursor in results"},
-			{"right / left", "Enter folder / go back"},
+			{"↑↓", "Move cursor in results"},
+			{"→ / ←", "Enter folder / go back"},
 			{"/", "Accept results, browse them"},
 			{"enter", "cd into selection"},
 			{"esc", "Clear filter"},
 		}},
 		{"Settings mode", []helpEntry{
-			{"j/k or up/down", "Move cursor"},
+			{"j/k or ↑↓", "Move cursor"},
 			{"space / enter", "Toggle bool / cycle enum"},
-			{"left/right", "Cycle enum value"},
+			{"←→", "Cycle enum value"},
 			{"S", "Save and exit"},
 			{"esc", "Cancel without saving"},
 		}},
@@ -1339,7 +1339,7 @@ func (m model) renderHelp() string {
 	for i := end - m.helpScroll; i < vh; i++ {
 		b.WriteString("\n")
 	}
-	hint := "  up/down or jk to scroll | g top | G bottom | esc/q/? back"
+	hint := "  ↑↓/jk scroll | g top | G bottom | esc/q/? back"
 	if len(lines) > vh {
 		hint += fmt.Sprintf("   %d/%d", m.helpScroll+1, len(lines)-vh+1)
 	}
@@ -1575,8 +1575,8 @@ func (m model) renderSettings() string {
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cfgPath, home) {
 		cfgPath = "~" + cfgPath[len(home):]
 	}
-	b.WriteString("\n  " + titleStyle.Render("Settings") + "\n")
-	b.WriteString("  " + dimStyle.Render(cfgPath) + "\n\n")
+	b.WriteString("\n  " + dimStyle.Render(cfgPath) + "\n")
+	b.WriteString("  " + titleStyle.Render("Settings") + "\n\n")
 
 	currentSection := ""
 	for i, f := range fields {
@@ -1655,7 +1655,7 @@ func (m model) renderSettings() string {
 		return b.String()
 	}
 
-	hint := dimStyle.Render("  up/down move | space toggle | left/right cycle | S save | esc cancel")
+	hint := dimStyle.Render("  ↑↓ move | space toggle | ←→ cycle | S save | esc cancel")
 	b.WriteString(hint)
 	return b.String()
 }
@@ -2127,7 +2127,7 @@ func (m model) View() string {
 			searchLabel = dimStyle.Render("SEARCH")
 		}
 		statusLeft = searchLabel +
-			dimStyle.Render("  up/down move | right enter | left back | / accept | enter cd | esc clear")
+			dimStyle.Render("  ↑↓ move | → enter | ← back | / accept | enter cd | esc clear")
 	default:
 		var navLabel string
 		if m.config.NerdFont {
