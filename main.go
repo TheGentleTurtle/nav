@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,9 +12,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.0.1"
+const version = "1.1.0"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -46,24 +48,51 @@ Usage:
   nav --uninstall    Remove shell wrapper and uninstall nav
 
 Navigation:
-  hjkl / ↑↓←→         Navigate
-  l / →                Enter folder
-  h / ←                Go back
-  enter                cd into selected folder and exit
-  o                    Open in default app (Finder for folders)
-  c                    Copy path to clipboard
+  hjkl / arrows        Navigate (cursor wraps)
+  l / right            Enter folder
+  h / left             Go back
   ~                    Jump to home directory
+
+Action:
+  enter                cd (folder = into; file = current dir)
+  space                cd into current directory (ignore cursor)
+  o                    Open in default app
+  R                    Reveal selected item in Finder
+  t                    Show file tree (interactive)
+  c                    Copy path to clipboard
+
+View:
+  /                    Fuzzy search
+  s                    Cycle sort: name -> modified -> size
   [.]                  Toggle hidden files
-  /                    Search (type to filter)
+
+System:
+  ,                    Open settings
+  ?                    Open help (also accessible from settings)
   q                    Quit
 
+Tree mode:
+  left/right           Decrease/increase depth (0 -> infinite -> 0)
+  f                    Toggle files vs folders only
+  .                    Toggle hidden files
+  i                    Toggle skip ignored (node_modules, .git, etc.)
+  m                    Toggle format: ASCII or Markdown
+  c                    Copy tree to clipboard
+  esc/q                Back to file list
+
+Settings:
+  Settings persist to ~/.config/nav/config.json
+  Configurable: display (hidden, folders-on-top, sort), behavior (smart Enter),
+    tree defaults (depth, files, hidden, skip-ignored, format)
+  Smart Enter: when on, Enter on a file opens it instead of cd'ing
+
 Search mode:
-  type                 Filter files by name
-  ↑↓                   Move cursor in results
-  → / ←                Enter folder / go back
+  type                 Fuzzy filter files by name
+  up/down              Move cursor in results
+  right / left         Enter folder / go back
   /                    Accept results and browse them
-  enter                cd into selection and exit
-  esc                  Cancel search and clear filter
+  enter                cd into folder (or open file with smart Enter)
+  esc                  Clear filter
   backspace            Delete last character
 
 More info: https://github.com/TheGentleTurtle/nav
@@ -125,6 +154,27 @@ const (
 	pillOpen  = "\ue0b6"
 	pillClose = "\ue0b4"
 )
+
+func (m model) pillOpenStr() string {
+	if m.config.NerdFont {
+		return pillOpen
+	}
+	return ""
+}
+
+func (m model) pillCloseStr() string {
+	if m.config.NerdFont {
+		return pillClose
+	}
+	return ""
+}
+
+func (m model) entryIconStr(e os.DirEntry) string {
+	if !m.config.NerdFont {
+		return ""
+	}
+	return entryIcon(e)
+}
 
 // Nerd Font icons
 var (
@@ -307,11 +357,151 @@ func (m setupModel) View() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-12s %s\n", cursor, opt.label, opt.desc))
 	}
-	b.WriteString("\n  hjkl/↑↓←→ | enter select | q quit\n")
+	b.WriteString("\n  hjkl/arrows | enter select | q quit\n")
 	return b.String()
 }
 
+// --- Config ---
+
+type Config struct {
+	ShowHidden   bool   `json:"show_hidden"`
+	FoldersOnTop bool   `json:"folders_on_top"`
+	SortMode     string `json:"sort_mode"`
+	SmartEnter   bool   `json:"smart_enter"`
+	NerdFont     bool   `json:"nerd_font"`
+
+	TreeDepth   int    `json:"tree_depth"` // -1 = ∞
+	TreeFiles   bool   `json:"tree_files"`
+	TreeHidden  bool   `json:"tree_hidden"`
+	TreeIgnored bool   `json:"tree_skip_ignored"`
+	TreeFormat  string `json:"tree_format"` // "ascii" or "md"
+}
+
+func detectNerdFont() bool {
+	// Default ON. Setup asks the user during install if they have a Nerd Font;
+	// their answer overrides this guess. Apple Terminal usually doesn't have one
+	// configured, so default to OFF for that one.
+	if os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
+		return false
+	}
+	return true
+}
+
+func defaultConfig() Config {
+	return Config{
+		ShowHidden:   false,
+		FoldersOnTop: true,
+		SortMode:     "name",
+		SmartEnter:   false,
+		NerdFont:     detectNerdFont(),
+
+		TreeDepth:   0,
+		TreeFiles:   true,
+		TreeHidden:  false,
+		TreeIgnored: true,
+		TreeFormat:  "ascii",
+	}
+}
+
+func configPath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "nav", "config.json")
+}
+
+func loadConfig() Config {
+	cfg := defaultConfig()
+	data, err := os.ReadFile(configPath())
+	if err != nil {
+		return cfg
+	}
+	json.Unmarshal(data, &cfg)
+	return cfg
+}
+
+func saveConfig(cfg Config) error {
+	path := configPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func parseSortMode(s string) sortMode {
+	switch s {
+	case "modified":
+		return sortModified
+	case "size":
+		return sortSize
+	}
+	return sortName
+}
+
+func sortModeString(m sortMode) string {
+	switch m {
+	case sortModified:
+		return "modified"
+	case sortSize:
+		return "size"
+	}
+	return "name"
+}
+
 // --- File navigator model ---
+
+type viewMode int
+
+const (
+	modeNormal viewMode = iota
+	modeSettings
+	modeTree
+	modeHelp
+)
+
+type treeOptions struct {
+	root          string
+	depth         int // -1 means unlimited
+	includeFiles  bool
+	includeHidden bool
+	skipIgnored   bool
+	format        string // "ascii" or "md"
+}
+
+func treeOptionsFromConfig(root string, cfg Config) treeOptions {
+	format := cfg.TreeFormat
+	if format != "ascii" && format != "md" {
+		format = "ascii"
+	}
+	return treeOptions{
+		root:          root,
+		depth:         cfg.TreeDepth,
+		includeFiles:  cfg.TreeFiles,
+		includeHidden: cfg.TreeHidden,
+		skipIgnored:   cfg.TreeIgnored,
+		format:        format,
+	}
+}
+
+type sortMode int
+
+const (
+	sortName sortMode = iota
+	sortModified
+	sortSize
+)
+
+func (s sortMode) label() string {
+	switch s {
+	case sortModified:
+		return "mod"
+	case sortSize:
+		return "size"
+	}
+	return "name"
+}
 
 type model struct {
 	cwd        string
@@ -328,20 +518,71 @@ type model struct {
 	filtering  bool
 	allEntries []os.DirEntry
 	flash      string
+
+	mode         viewMode
+	sortMode     sortMode
+	foldersOnTop bool
+	config       Config
+
+	settingsCursor int
+	settingsDraft  Config
+
+	tree         treeOptions
+	treeOutput   string
+	treeCount    int
+	treeTrunc    bool
+	treeHitLimit bool
+	treeMaxDepth int
+
+	helpScroll int
+
+	settingsConfirming    bool
+	settingsConfirmAction string // "save" or "cancel"
+
+	matchIndices map[string][]int
 }
 
-func sortEntries(entries []os.DirEntry) {
+func sortEntries(entries []os.DirEntry, mode sortMode, foldersOnTop bool) {
 	sort.SliceStable(entries, func(i, j int) bool {
-		di := entries[i].IsDir()
-		dj := entries[j].IsDir()
-		if di != dj {
-			return di
+		if foldersOnTop {
+			di := entries[i].IsDir()
+			dj := entries[j].IsDir()
+			if di != dj {
+				return di
+			}
+		}
+		switch mode {
+		case sortModified:
+			ii, ei := entries[i].Info()
+			ij, ej := entries[j].Info()
+			if ei != nil || ej != nil {
+				return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+			}
+			return ii.ModTime().After(ij.ModTime())
+		case sortSize:
+			ii, ei := entries[i].Info()
+			ij, ej := entries[j].Info()
+			if ei != nil || ej != nil {
+				return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+			}
+			si := ii.Size()
+			sj := ij.Size()
+			if entries[i].IsDir() {
+				si = 0
+			}
+			if entries[j].IsDir() {
+				sj = 0
+			}
+			if si != sj {
+				return si > sj
+			}
+			return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
 		}
 		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
 	})
 }
 
-func loadDir(path string, showHidden bool) ([]os.DirEntry, error) {
+func loadDir(path string, showHidden bool, mode sortMode, foldersOnTop bool) ([]os.DirEntry, error) {
 	all, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -353,7 +594,7 @@ func loadDir(path string, showHidden bool) ([]os.DirEntry, error) {
 		}
 		entries = append(entries, e)
 	}
-	sortEntries(entries)
+	sortEntries(entries, mode, foldersOnTop)
 	return entries, nil
 }
 
@@ -362,14 +603,20 @@ func initialModel() model {
 	if err != nil {
 		cwd = "/"
 	}
-	entries, _ := loadDir(cwd, false)
+	cfg := loadConfig()
+	sortM := parseSortMode(cfg.SortMode)
+	entries, _ := loadDir(cwd, cfg.ShowHidden, sortM, cfg.FoldersOnTop)
 	return model{
-		cwd:        cwd,
-		entries:    entries,
-		allEntries: entries,
-		history:    make(map[string]string),
-		height:     24,
-		width:      80,
+		cwd:          cwd,
+		entries:      entries,
+		allEntries:   entries,
+		history:      make(map[string]string),
+		height:       24,
+		width:        80,
+		showHidden:   cfg.ShowHidden,
+		sortMode:     sortM,
+		foldersOnTop: cfg.FoldersOnTop,
+		config:       cfg,
 	}
 }
 
@@ -394,7 +641,7 @@ func (m *model) restoreCursor() {
 }
 
 func (m model) navigateTo(path string) model {
-	entries, err := loadDir(path, m.showHidden)
+	entries, err := loadDir(path, m.showHidden, m.sortMode, m.foldersOnTop)
 	if err != nil {
 		m.err = err.Error()
 		return m
@@ -409,6 +656,29 @@ func (m model) navigateTo(path string) model {
 	m.restoreCursor()
 	m.fixOffset()
 	return m
+}
+
+func (m *model) reload() {
+	entries, err := loadDir(m.cwd, m.showHidden, m.sortMode, m.foldersOnTop)
+	if err != nil {
+		m.err = err.Error()
+		return
+	}
+	var curName string
+	if len(m.entries) > 0 && m.cursor < len(m.entries) {
+		curName = m.entries[m.cursor].Name()
+	}
+	m.entries = entries
+	m.allEntries = entries
+	m.filter = ""
+	m.cursor = 0
+	for i, e := range m.entries {
+		if e.Name() == curName {
+			m.cursor = i
+			break
+		}
+	}
+	m.fixOffset()
 }
 
 func (m model) totalItems() int { return len(m.entries) }
@@ -453,20 +723,827 @@ func (m *model) fixOffset() {
 }
 
 func (m *model) applyFilter() {
-	if m.filter == "" {
-		m.entries = m.allEntries
-	} else {
-		lower := strings.ToLower(m.filter)
-		filtered := make([]os.DirEntry, 0)
-		for _, e := range m.allEntries {
-			if strings.Contains(strings.ToLower(e.Name()), lower) {
-				filtered = append(filtered, e)
-			}
-		}
-		m.entries = filtered
-	}
 	m.cursor = 0
 	m.offset = 0
+	if m.filter == "" {
+		m.entries = m.allEntries
+		m.matchIndices = nil
+		return
+	}
+	names := make([]string, len(m.allEntries))
+	for i, e := range m.allEntries {
+		names[i] = e.Name()
+	}
+	matches := fuzzy.Find(m.filter, names)
+	filtered := make([]os.DirEntry, len(matches))
+	m.matchIndices = make(map[string][]int, len(matches))
+	for i, match := range matches {
+		filtered[i] = m.allEntries[match.Index]
+		m.matchIndices[m.allEntries[match.Index].Name()] = match.MatchedIndexes
+	}
+	m.entries = filtered
+}
+
+func openInDefaultApp(path string) error {
+	return exec.Command("open", path).Start()
+}
+
+// truncatePath shortens a path with ellipsis in the middle when it exceeds maxWidth.
+// Preserves leading prefix (~ or first segment) and as much trailing context as fits.
+// Example: ~/Documents/Code/Tools/nav/main.go → ~/Documents/.../nav/main.go
+func truncatePath(path string, maxWidth int) string {
+	if maxWidth < 10 || len(path) <= maxWidth {
+		return path
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		return path
+	}
+	first := parts[0]
+	if first == "" {
+		first = "/" + parts[1]
+		parts = parts[1:]
+	}
+	last := parts[len(parts)-1]
+	// Try to keep as many trailing segments as fit
+	for keepEnd := len(parts) - 1; keepEnd >= 1; keepEnd-- {
+		tail := strings.Join(parts[len(parts)-keepEnd:], "/")
+		candidate := first + "/.../" + tail
+		if len(candidate) <= maxWidth {
+			return candidate
+		}
+	}
+	if len(first+"/.../"+last) <= maxWidth {
+		return first + "/.../" + last
+	}
+	return ".../" + last
+}
+
+func revealInFinder(path string) error {
+	return exec.Command("open", "-R", path).Start()
+}
+
+// --- Tree ---
+
+const treeMaxItems = 500
+
+var treeIgnored = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	".DS_Store":    true,
+	"__pycache__":  true,
+	".idea":        true,
+	".vscode":      true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	".next":        true,
+	".cache":       true,
+	"vendor":       true,
+}
+
+type treeBuilder struct {
+	opts     treeOptions
+	out      strings.Builder
+	count    int
+	trunc    bool
+	hitLimit bool
+	maxDepth int
+}
+
+func hasContent(path string, opts treeOptions) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !opts.includeHidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		if opts.skipIgnored && treeIgnored[name] {
+			continue
+		}
+		if !opts.includeFiles && !e.IsDir() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (tb *treeBuilder) walk(path string, prefix string, depth int) {
+	if tb.trunc {
+		return
+	}
+	if tb.opts.depth >= 0 && depth > tb.opts.depth {
+		// Check whether there's anything we WOULD have shown if depth were larger
+		if hasContent(path, tb.opts) {
+			tb.hitLimit = true
+		}
+		return
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		tb.out.WriteString(prefix + dimStyle.Render("[?]") + "\n")
+		return
+	}
+	filtered := make([]os.DirEntry, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if !tb.opts.includeHidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		if tb.opts.skipIgnored && treeIgnored[name] {
+			continue
+		}
+		if !tb.opts.includeFiles && !e.IsDir() {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		di := filtered[i].IsDir()
+		dj := filtered[j].IsDir()
+		if di != dj {
+			return di
+		}
+		return strings.ToLower(filtered[i].Name()) < strings.ToLower(filtered[j].Name())
+	})
+
+	for i, e := range filtered {
+		if tb.count >= treeMaxItems {
+			tb.trunc = true
+			return
+		}
+		tb.count++
+		if depth+1 > tb.maxDepth {
+			tb.maxDepth = depth + 1
+		}
+		isLast := i == len(filtered)-1
+		name := e.Name()
+		isSymlink := e.Type()&os.ModeSymlink != 0
+		isDir := e.IsDir()
+		if isDir {
+			name += "/"
+		}
+		if isSymlink {
+			name += " →"
+		}
+
+		switch tb.opts.format {
+		case "md":
+			indent := strings.Repeat("  ", depth+1)
+			tb.out.WriteString(indent + "- " + name + "\n")
+		default: // ascii
+			var connector, nextPrefix string
+			if isLast {
+				connector = "└── "
+				nextPrefix = prefix + "    "
+			} else {
+				connector = "├── "
+				nextPrefix = prefix + "│   "
+			}
+			tb.out.WriteString(prefix + connector + name + "\n")
+			if isDir && !isSymlink {
+				tb.walk(filepath.Join(path, e.Name()), nextPrefix, depth+1)
+				continue
+			}
+		}
+
+		if tb.opts.format == "md" && isDir && !isSymlink {
+			tb.walk(filepath.Join(path, e.Name()), "", depth+1)
+		}
+	}
+}
+
+type treeResult struct {
+	output    string
+	count     int
+	truncated bool
+	hitLimit  bool
+	maxDepth  int
+}
+
+func buildTree(opts treeOptions) treeResult {
+	tb := &treeBuilder{opts: opts}
+	rootName := filepath.Base(opts.root) + "/"
+	switch opts.format {
+	case "md":
+		tb.out.WriteString("- " + rootName + "\n")
+	default:
+		tb.out.WriteString(rootName + "\n")
+	}
+	tb.walk(opts.root, "", 0)
+	if tb.trunc {
+		tb.out.WriteString(fmt.Sprintf("\n... truncated at %d items\n", treeMaxItems))
+	}
+	return treeResult{
+		output:    tb.out.String(),
+		count:     tb.count,
+		truncated: tb.trunc,
+		hitLimit:  tb.hitLimit,
+		maxDepth:  tb.maxDepth,
+	}
+}
+
+func (m *model) rebuildTree() {
+	r := buildTree(m.tree)
+	m.treeOutput = r.output
+	m.treeCount = r.count
+	m.treeTrunc = r.truncated
+	m.treeHitLimit = r.hitLimit
+	m.treeMaxDepth = r.maxDepth
+}
+
+func (m model) updateTree(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "q":
+		m.mode = modeNormal
+		return m, nil
+	case "left":
+		// cycle: ∞ → max+ → ... → 1 → 0 → ∞
+		if m.tree.depth == -1 {
+			// from ∞ go to a sensible big number, then keep stepping down
+			if m.treeMaxDepth > 0 {
+				m.tree.depth = m.treeMaxDepth
+			} else {
+				m.tree.depth = 5
+			}
+		} else if m.tree.depth == 0 {
+			m.tree.depth = -1
+		} else {
+			m.tree.depth--
+		}
+		m.rebuildTree()
+		return m, nil
+	case "right":
+		// cycle: 0 → 1 → 2 → ... → ∞ → 0
+		if m.tree.depth == -1 {
+			m.tree.depth = 0
+		} else {
+			m.tree.depth++
+		}
+		m.rebuildTree()
+		return m, nil
+	case "f":
+		m.tree.includeFiles = !m.tree.includeFiles
+		m.rebuildTree()
+		return m, nil
+	case ".":
+		m.tree.includeHidden = !m.tree.includeHidden
+		m.rebuildTree()
+		return m, nil
+	case "i":
+		m.tree.skipIgnored = !m.tree.skipIgnored
+		m.rebuildTree()
+		return m, nil
+	case "m":
+		if m.tree.format == "ascii" {
+			m.tree.format = "md"
+		} else {
+			m.tree.format = "ascii"
+		}
+		m.rebuildTree()
+		return m, nil
+	case "c":
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(m.treeOutput)
+		if cmd.Run() == nil {
+			m.flash = "tree copied"
+			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) renderTree() string {
+	var b strings.Builder
+
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	chipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+
+	rootDisplay := m.tree.root
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(rootDisplay, home) {
+		rootDisplay = "~" + rootDisplay[len(home):]
+	}
+
+	depthStr := fmt.Sprintf("%d", m.tree.depth)
+	if m.tree.depth == -1 {
+		depthStr = "∞"
+	}
+	// Add (max) indicator if current depth shows everything (no further depth would add anything)
+	if m.tree.depth != -1 && !m.treeHitLimit && !m.treeTrunc && m.tree.depth >= m.treeMaxDepth && m.treeMaxDepth > 0 {
+		depthStr += " (max)"
+	} else if m.tree.depth == -1 && !m.treeTrunc {
+		depthStr += " (" + fmt.Sprintf("%d", m.treeMaxDepth) + " deep)"
+	}
+	filesStr := "off"
+	if m.tree.includeFiles {
+		filesStr = "on"
+	}
+	hiddenStr := "off"
+	if m.tree.includeHidden {
+		hiddenStr = "on"
+	}
+	ignoredStr := "skip"
+	if !m.tree.skipIgnored {
+		ignoredStr = "show"
+	}
+
+	b.WriteString("\n  " + titleStyle.Render("Tree: "+rootDisplay) + "\n")
+	b.WriteString("  " + chipStyle.Render(fmt.Sprintf("depth: %s   files: %s   hidden: %s   format: %s   ignored: %s",
+		depthStr, filesStr, hiddenStr, m.tree.format, ignoredStr)) + "\n\n")
+
+	vh := m.height - 6
+	if vh < 1 {
+		vh = 1
+	}
+
+	lines := strings.Split(m.treeOutput, "\n")
+	if len(lines) > vh {
+		lines = lines[:vh]
+		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ... %d more lines (copy to see all)", len(strings.Split(m.treeOutput, "\n"))-vh)))
+	}
+	for _, line := range lines {
+		b.WriteString("  " + line + "\n")
+	}
+
+	for i := len(lines); i < vh; i++ {
+		b.WriteString("\n")
+	}
+
+	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  left/right depth | f files | . hidden | i ignored | m format | c copy | esc back",
+		m.treeCount))
+	if m.flash != "" {
+		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
+	}
+	b.WriteString(hint)
+	return b.String()
+}
+
+// --- Help ---
+
+type helpEntry struct {
+	key  string
+	desc string
+}
+
+type helpSection struct {
+	title   string
+	entries []helpEntry
+}
+
+func helpSections() []helpSection {
+	return []helpSection{
+		{"Navigation", []helpEntry{
+			{"hjkl / arrows", "Move (l or right enters folder, h or left goes back)"},
+			{"~", "Jump to home directory"},
+		}},
+		{"Action", []helpEntry{
+			{"enter", "cd — folder = into; file = current dir"},
+			{"space", "cd into current directory (ignore cursor)"},
+			{"o", "Open in default app"},
+			{"R", "Reveal in Finder"},
+			{"t", "Show file tree (interactive view)"},
+			{"c", "Copy path to clipboard"},
+		}},
+		{"View", []helpEntry{
+			{"/", "Fuzzy search"},
+			{"s", "Cycle sort: name -> modified -> size"},
+			{".", "Toggle hidden files"},
+		}},
+		{"System", []helpEntry{
+			{",", "Open settings"},
+			{"?", "Open this help"},
+			{"q", "Quit"},
+		}},
+		{"Tree mode", []helpEntry{
+			{"left/right", "Decrease/increase depth (0 -> infinite -> 0)"},
+			{"f", "Toggle files vs folders only"},
+			{".", "Toggle hidden files"},
+			{"i", "Toggle skip ignored (node_modules, .git, ...)"},
+			{"m", "Toggle format: ASCII / Markdown"},
+			{"c", "Copy tree to clipboard"},
+			{"esc / q", "Back to file list"},
+		}},
+		{"Search mode", []helpEntry{
+			{"type", "Fuzzy filter files by name"},
+			{"up/down", "Move cursor in results"},
+			{"right / left", "Enter folder / go back"},
+			{"/", "Accept results, browse them"},
+			{"enter", "cd into selection"},
+			{"esc", "Clear filter"},
+		}},
+		{"Settings mode", []helpEntry{
+			{"j/k or up/down", "Move cursor"},
+			{"space / enter", "Toggle bool / cycle enum"},
+			{"left/right", "Cycle enum value"},
+			{"S", "Save and exit"},
+			{"esc", "Cancel without saving"},
+		}},
+	}
+}
+
+func renderedHelpLines() []string {
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	sectionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	linkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Underline(true)
+	subStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  "+titleStyle.Render("nav v"+version+" — terminal directory navigator"))
+	lines = append(lines, "  "+linkStyle.Render("https://github.com/TheGentleTurtle/nav"))
+	lines = append(lines, "  "+subStyle.Render("Issues & feature requests: ")+linkStyle.Render("https://github.com/TheGentleTurtle/nav/issues"))
+	lines = append(lines, "")
+	for _, sec := range helpSections() {
+		lines = append(lines, "  "+sectionStyle.Render(sec.title))
+		for _, e := range sec.entries {
+			keyW := 14
+			k := e.key
+			if len(k) > keyW {
+				k = k[:keyW]
+			}
+			k = k + strings.Repeat(" ", keyW-len(k))
+			lines = append(lines, "    "+keyStyle.Render(k)+"  "+descStyle.Render(e.desc))
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines, "  "+subStyle.Render("Settings file: ~/.config/nav/config.json"))
+	lines = append(lines, "  "+subStyle.Render("License: CC BY-NC 4.0"))
+	lines = append(lines, "")
+	return lines
+}
+
+func (m model) updateHelp(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "q", "?":
+		m.mode = modeNormal
+		return m, nil
+	case "k", "up":
+		if m.helpScroll > 0 {
+			m.helpScroll--
+		}
+	case "j", "down":
+		lines := renderedHelpLines()
+		vh := m.height - 2
+		if m.helpScroll < len(lines)-vh {
+			m.helpScroll++
+		}
+	case "g":
+		m.helpScroll = 0
+	case "G":
+		lines := renderedHelpLines()
+		vh := m.height - 2
+		max := len(lines) - vh
+		if max < 0 {
+			max = 0
+		}
+		m.helpScroll = max
+	}
+	return m, nil
+}
+
+func (m model) renderHelp() string {
+	var b strings.Builder
+	lines := renderedHelpLines()
+	vh := m.height - 2
+	if vh < 1 {
+		vh = 1
+	}
+	end := m.helpScroll + vh
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := m.helpScroll; i < end; i++ {
+		b.WriteString(lines[i] + "\n")
+	}
+	for i := end - m.helpScroll; i < vh; i++ {
+		b.WriteString("\n")
+	}
+	hint := "  up/down or jk to scroll | g top | G bottom | esc/q/? back"
+	if len(lines) > vh {
+		hint += fmt.Sprintf("   %d/%d", m.helpScroll+1, len(lines)-vh+1)
+	}
+	b.WriteString(dimStyle.Render(hint))
+	return b.String()
+}
+
+// --- Settings ---
+
+type settingField struct {
+	label   string
+	section string
+	kind    string // "bool", "sort", "treeDepth", "treeFormat", "action"
+}
+
+func settingsFields() []settingField {
+	return []settingField{
+		{"Show hidden files (default)", "Display", "bool"},
+		{"Folders always on top", "Display", "bool"},
+		{"Sort mode (default)", "Display", "sort"},
+		{"Nerd Font icons", "Display", "bool"},
+		{"Smart Enter (open files instead of cd)", "Behavior", "bool"},
+		{"Default depth", "Tree defaults", "treeDepth"},
+		{"Include files (default)", "Tree defaults", "bool"},
+		{"Include hidden files (default)", "Tree defaults", "bool"},
+		{"Skip ignored (default)", "Tree defaults", "bool"},
+		{"Format (default)", "Tree defaults", "treeFormat"},
+		{"Open help", "Other", "action"},
+		{"Open config file in editor", "Other", "action"},
+		{"Reset all settings to defaults", "Other", "action"},
+	}
+}
+
+func (m model) settingsChanged() bool {
+	return m.settingsDraft != m.config
+}
+
+func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
+	fields := settingsFields()
+
+	// Confirm dialog for save/cancel
+	if m.settingsConfirming {
+		switch key {
+		case "y", "Y", "enter":
+			if m.settingsConfirmAction == "save" {
+				m.config = m.settingsDraft
+				m.showHidden = m.config.ShowHidden
+				m.foldersOnTop = m.config.FoldersOnTop
+				m.sortMode = parseSortMode(m.config.SortMode)
+				saveConfig(m.config)
+				m.reload()
+				m.flash = "settings saved"
+			} else {
+				m.flash = "changes discarded"
+			}
+			m.settingsConfirming = false
+			m.settingsConfirmAction = ""
+			m.mode = modeNormal
+			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
+		case "n", "N", "esc":
+			m.settingsConfirming = false
+			m.settingsConfirmAction = ""
+			return m, nil
+		}
+		return m, nil
+	}
+
+	switch key {
+	case "esc":
+		if m.settingsChanged() {
+			m.settingsConfirming = true
+			m.settingsConfirmAction = "cancel"
+			return m, nil
+		}
+		m.mode = modeNormal
+		return m, nil
+	case "q":
+		if m.settingsChanged() {
+			m.settingsConfirming = true
+			m.settingsConfirmAction = "cancel"
+			return m, nil
+		}
+		m.mode = modeNormal
+		return m, nil
+	case ",":
+		if m.settingsChanged() {
+			m.settingsConfirming = true
+			m.settingsConfirmAction = "cancel"
+			return m, nil
+		}
+		m.mode = modeNormal
+		return m, nil
+	case "k", "up":
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		} else {
+			m.settingsCursor = len(fields) - 1
+		}
+		return m, nil
+	case "j", "down":
+		if m.settingsCursor < len(fields)-1 {
+			m.settingsCursor++
+		} else {
+			m.settingsCursor = 0
+		}
+		return m, nil
+	case " ", "enter":
+		f := fields[m.settingsCursor]
+		switch f.kind {
+		case "bool":
+			switch m.settingsCursor {
+			case 0:
+				m.settingsDraft.ShowHidden = !m.settingsDraft.ShowHidden
+			case 1:
+				m.settingsDraft.FoldersOnTop = !m.settingsDraft.FoldersOnTop
+			case 3:
+				m.settingsDraft.NerdFont = !m.settingsDraft.NerdFont
+			case 4:
+				m.settingsDraft.SmartEnter = !m.settingsDraft.SmartEnter
+			case 6:
+				m.settingsDraft.TreeFiles = !m.settingsDraft.TreeFiles
+			case 7:
+				m.settingsDraft.TreeHidden = !m.settingsDraft.TreeHidden
+			case 8:
+				m.settingsDraft.TreeIgnored = !m.settingsDraft.TreeIgnored
+			}
+		case "sort":
+			cur := parseSortMode(m.settingsDraft.SortMode)
+			cur = (cur + 1) % 3
+			m.settingsDraft.SortMode = sortModeString(cur)
+		case "treeDepth":
+			// 0 → 1 → 2 → ... → 10 → ∞ → 0
+			if m.settingsDraft.TreeDepth == -1 {
+				m.settingsDraft.TreeDepth = 0
+			} else if m.settingsDraft.TreeDepth >= 10 {
+				m.settingsDraft.TreeDepth = -1
+			} else {
+				m.settingsDraft.TreeDepth++
+			}
+		case "treeFormat":
+			if m.settingsDraft.TreeFormat == "ascii" {
+				m.settingsDraft.TreeFormat = "md"
+			} else {
+				m.settingsDraft.TreeFormat = "ascii"
+			}
+		case "action":
+			switch f.label {
+			case "Open help":
+				m.mode = modeHelp
+				m.helpScroll = 0
+			case "Open config file in editor":
+				openInDefaultApp(configPath())
+				m.flash = "opening config..."
+				return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
+			case "Reset all settings to defaults":
+				saved := m.settingsDraft.NerdFont // preserve onboarding choice
+				m.settingsDraft = defaultConfig()
+				m.settingsDraft.NerdFont = saved
+				m.flash = "settings reset (press S to save)"
+				return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
+			}
+		}
+		return m, nil
+	case "left":
+		f := fields[m.settingsCursor]
+		switch f.kind {
+		case "sort":
+			cur := parseSortMode(m.settingsDraft.SortMode)
+			cur = (cur + 2) % 3
+			m.settingsDraft.SortMode = sortModeString(cur)
+		case "treeDepth":
+			if m.settingsDraft.TreeDepth == 0 {
+				m.settingsDraft.TreeDepth = -1
+			} else if m.settingsDraft.TreeDepth == -1 {
+				m.settingsDraft.TreeDepth = 10
+			} else {
+				m.settingsDraft.TreeDepth--
+			}
+		case "treeFormat":
+			if m.settingsDraft.TreeFormat == "ascii" {
+				m.settingsDraft.TreeFormat = "md"
+			} else {
+				m.settingsDraft.TreeFormat = "ascii"
+			}
+		}
+		return m, nil
+	case "right":
+		f := fields[m.settingsCursor]
+		switch f.kind {
+		case "sort":
+			cur := parseSortMode(m.settingsDraft.SortMode)
+			cur = (cur + 1) % 3
+			m.settingsDraft.SortMode = sortModeString(cur)
+		case "treeDepth":
+			if m.settingsDraft.TreeDepth == -1 {
+				m.settingsDraft.TreeDepth = 0
+			} else {
+				m.settingsDraft.TreeDepth++
+			}
+		case "treeFormat":
+			if m.settingsDraft.TreeFormat == "ascii" {
+				m.settingsDraft.TreeFormat = "md"
+			} else {
+				m.settingsDraft.TreeFormat = "ascii"
+			}
+		}
+		return m, nil
+	case "S", "ctrl+s":
+		if !m.settingsChanged() {
+			m.mode = modeNormal
+			return m, nil
+		}
+		m.settingsConfirming = true
+		m.settingsConfirmAction = "save"
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) renderSettings() string {
+	var b strings.Builder
+	fields := settingsFields()
+
+	titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	sectionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	cursorIndicator := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("▌")
+	checkOn := lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("[✓]")
+	checkOff := lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render("[ ]")
+	enumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+
+	cfgPath := configPath()
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(cfgPath, home) {
+		cfgPath = "~" + cfgPath[len(home):]
+	}
+	b.WriteString("\n  " + titleStyle.Render("Settings") + "\n")
+	b.WriteString("  " + dimStyle.Render(cfgPath) + "\n\n")
+
+	currentSection := ""
+	for i, f := range fields {
+		if f.section != currentSection {
+			if currentSection != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString("  " + sectionStyle.Render(f.section) + "\n")
+			currentSection = f.section
+		}
+
+		var value string
+		switch f.kind {
+		case "bool":
+			var on bool
+			switch i {
+			case 0:
+				on = m.settingsDraft.ShowHidden
+			case 1:
+				on = m.settingsDraft.FoldersOnTop
+			case 3:
+				on = m.settingsDraft.NerdFont
+			case 4:
+				on = m.settingsDraft.SmartEnter
+			case 6:
+				on = m.settingsDraft.TreeFiles
+			case 7:
+				on = m.settingsDraft.TreeHidden
+			case 8:
+				on = m.settingsDraft.TreeIgnored
+			}
+			if on {
+				value = checkOn
+			} else {
+				value = checkOff
+			}
+		case "sort":
+			value = enumStyle.Render("[ ‹ " + m.settingsDraft.SortMode + " › ]")
+		case "treeDepth":
+			d := fmt.Sprintf("%d", m.settingsDraft.TreeDepth)
+			if m.settingsDraft.TreeDepth == -1 {
+				d = "∞"
+			}
+			value = enumStyle.Render("[ ‹ " + d + " › ]")
+		case "treeFormat":
+			value = enumStyle.Render("[ ‹ " + m.settingsDraft.TreeFormat + " › ]")
+		case "action":
+			value = enumStyle.Render("[ enter ]")
+		}
+
+		indicator := "  "
+		if i == m.settingsCursor {
+			indicator = cursorIndicator + " "
+		}
+		labelW := 42
+		label := f.label
+		if len(label) < labelW {
+			label = label + strings.Repeat(" ", labelW-len(label))
+		}
+		b.WriteString("    " + indicator + labelStyle.Render(label) + value + "\n")
+	}
+
+	for i := 0; i < m.height-len(fields)-9; i++ {
+		b.WriteString("\n")
+	}
+
+	if m.settingsConfirming {
+		var prompt string
+		if m.settingsConfirmAction == "save" {
+			prompt = "Save changes? (y/n)"
+		} else {
+			prompt = "Discard changes? (y/n)"
+		}
+		promptStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+		b.WriteString("  " + promptStyle.Render(prompt))
+		return b.String()
+	}
+
+	hint := dimStyle.Render("  up/down move | space toggle | left/right cycle | S save | esc cancel")
+	b.WriteString(hint)
+	return b.String()
 }
 
 // --- Update ---
@@ -485,6 +1562,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		key := msg.String()
+
+		if m.mode == modeSettings {
+			return m.updateSettings(key)
+		}
+		if m.mode == modeTree {
+			return m.updateTree(key)
+		}
+		if m.mode == modeHelp {
+			return m.updateHelp(key)
+		}
 
 		if m.filtering {
 			switch key {
@@ -509,8 +1596,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				if len(m.entries) > 0 {
 					entry := m.entries[m.cursor]
+					target := filepath.Join(m.cwd, entry.Name())
 					if entry.IsDir() {
-						m.selected = filepath.Join(m.cwd, entry.Name())
+						m.selected = target
+					} else if m.config.SmartEnter {
+						openInDefaultApp(target)
 					} else {
 						m.selected = m.cwd
 					}
@@ -592,33 +1682,60 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			if len(m.entries) > 0 {
 				entry := m.entries[m.cursor]
+				target := filepath.Join(m.cwd, entry.Name())
 				if entry.IsDir() {
-					m.selected = filepath.Join(m.cwd, entry.Name())
+					m.selected = target
+				} else if m.config.SmartEnter {
+					openInDefaultApp(target)
 				} else {
 					m.selected = m.cwd
 				}
 			}
 			return m, tea.Quit
+		case " ":
+			m.selected = m.cwd
+			return m, tea.Quit
+		case "R":
+			if len(m.entries) > 0 && m.cursor < len(m.entries) {
+				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
+				revealInFinder(target)
+			}
+			return m, nil
+		case ",":
+			m.mode = modeSettings
+			m.settingsCursor = 0
+			m.settingsDraft = m.config
+			return m, nil
+		case "t":
+			root := m.cwd
+			if len(m.entries) > 0 && m.cursor < len(m.entries) {
+				entry := m.entries[m.cursor]
+				if entry.IsDir() {
+					root = filepath.Join(m.cwd, entry.Name())
+				}
+			}
+			m.tree = treeOptionsFromConfig(root, m.config)
+			m.rebuildTree()
+			m.mode = modeTree
+			return m, nil
+		case "?":
+			m.mode = modeHelp
+			m.helpScroll = 0
+			return m, nil
+		case "home":
+			home, err := os.UserHomeDir()
+			if err == nil {
+				m = m.navigateTo(home)
+			}
+			return m, nil
+		case "s":
+			m.sortMode = (m.sortMode + 1) % 3
+			m.reload()
+			m.flash = "sort: " + m.sortMode.label()
+			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
 		case ".":
 			m.showHidden = !m.showHidden
-			entries, err := loadDir(m.cwd, m.showHidden)
-			if err == nil {
-				var curName string
-				if len(m.entries) > 0 && m.cursor < len(m.entries) {
-					curName = m.entries[m.cursor].Name()
-				}
-				m.entries = entries
-				m.allEntries = entries
-				m.filter = ""
-				m.cursor = 0
-				for i, e := range m.entries {
-					if e.Name() == curName {
-						m.cursor = i
-						break
-					}
-				}
-				m.fixOffset()
-			}
+			m.reload()
 		case "o":
 			if len(m.entries) > 0 && m.cursor < len(m.entries) {
 				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
@@ -702,50 +1819,67 @@ func countItems(path string) int {
 	return len(entries)
 }
 
-func highlightMatch(name string, filter string, baseColor lipgloss.Color) string {
-	if filter == "" {
-		return lipgloss.NewStyle().Foreground(baseColor).Render(name)
-	}
-	lowerName := strings.ToLower(name)
-	lowerFilter := strings.ToLower(filter)
-	idx := strings.Index(lowerName, lowerFilter)
-	if idx == -1 {
-		return lipgloss.NewStyle().Foreground(baseColor).Render(name)
-	}
-	before := name[:idx]
-	match := name[idx : idx+len(filter)]
-	after := name[idx+len(filter):]
+func highlightFuzzy(name string, indices []int, baseColor lipgloss.Color) string {
 	baseS := lipgloss.NewStyle().Foreground(baseColor)
-	return baseS.Render(before) + matchStyle.Render(match) + baseS.Render(after)
+	if len(indices) == 0 {
+		return baseS.Render(name)
+	}
+	hit := make(map[int]bool, len(indices))
+	for _, i := range indices {
+		hit[i] = true
+	}
+	var b strings.Builder
+	for i, r := range name {
+		if hit[i] {
+			b.WriteString(matchStyle.Render(string(r)))
+		} else {
+			b.WriteString(baseS.Render(string(r)))
+		}
+	}
+	return b.String()
 }
 
-func highlightMatchBg(name string, filter string, fg lipgloss.Color, bg lipgloss.Color) string {
+func highlightFuzzyBg(name string, indices []int, fg lipgloss.Color, bg lipgloss.Color) string {
 	baseS := lipgloss.NewStyle().Foreground(fg).Background(bg)
-	if filter == "" {
+	if len(indices) == 0 {
 		return baseS.Render(name)
 	}
-	lowerName := strings.ToLower(name)
-	lowerFilter := strings.ToLower(filter)
-	idx := strings.Index(lowerName, lowerFilter)
-	if idx == -1 {
-		return baseS.Render(name)
+	hit := make(map[int]bool, len(indices))
+	for _, i := range indices {
+		hit[i] = true
 	}
-	before := name[:idx]
-	match := name[idx : idx+len(filter)]
-	after := name[idx+len(filter):]
 	matchS := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Background(bg).Bold(true).Underline(true)
-	return baseS.Render(before) + matchS.Render(match) + baseS.Render(after)
+	var b strings.Builder
+	for i, r := range name {
+		if hit[i] {
+			b.WriteString(matchS.Render(string(r)))
+		} else {
+			b.WriteString(baseS.Render(string(r)))
+		}
+	}
+	return b.String()
 }
 
 // --- View ---
 
 func (m model) View() string {
+	if m.mode == modeSettings {
+		return m.renderSettings()
+	}
+	if m.mode == modeTree {
+		return m.renderTree()
+	}
+	if m.mode == modeHelp {
+		return m.renderHelp()
+	}
+
 	var b strings.Builder
 
 	pathDisplay := m.cwd
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(pathDisplay, home) {
 		pathDisplay = "~" + pathDisplay[len(home):]
 	}
+	pathDisplay = truncatePath(pathDisplay, m.width-4)
 	b.WriteString(pathStyle.Render("  "+pathDisplay) + "\n\n")
 
 	vh := m.viewportHeight()
@@ -764,8 +1898,13 @@ func (m model) View() string {
 		for i := m.offset; i < end; i++ {
 			entry := m.entries[i]
 			isCursor := m.cursor == i
-			color := entryColor(entry)
-			icon := entryIcon(entry)
+			var color lipgloss.Color
+			if m.config.NerdFont {
+				color = entryColor(entry)
+			} else {
+				color = lipgloss.Color("252") // uniform default text in caret mode
+			}
+			icon := m.entryIconStr(entry)
 
 			name := entry.Name()
 			if entry.IsDir() {
@@ -782,35 +1921,54 @@ func (m model) View() string {
 			}
 
 			if isCursor {
-				openPill := lipgloss.NewStyle().Foreground(cursorBg).Render(pillOpen)
-				closePill := lipgloss.NewStyle().Foreground(cursorBg).Render(pillClose)
-				iconStr := lipgloss.NewStyle().Foreground(color).Background(cursorBg).Render(icon)
-				spacer := lipgloss.NewStyle().Background(cursorBg).Render(" ")
-
-				var styledName string
-				if m.filter != "" {
-					styledName = highlightMatchBg(name, m.filter, color, cursorBg)
+				if !m.config.NerdFont {
+					// Minimal mode: caret + plain text
+					var styledName string
+					if m.filter != "" {
+						styledName = highlightFuzzy(name, m.matchIndices[entry.Name()], color)
+					} else {
+						styledName = lipgloss.NewStyle().Foreground(color).Bold(true).Render(name)
+					}
+					b.WriteString("> " + styledName + "\n")
 				} else {
-					styledName = lipgloss.NewStyle().Foreground(color).Background(cursorBg).Bold(true).Render(name)
-				}
+					openPill := lipgloss.NewStyle().Foreground(cursorBg).Render(m.pillOpenStr())
+					closePill := lipgloss.NewStyle().Foreground(cursorBg).Render(m.pillCloseStr())
+					iconStr := lipgloss.NewStyle().Foreground(color).Background(cursorBg).Render(icon)
+					spacer := lipgloss.NewStyle().Background(cursorBg).Render(" ")
 
-				contentWidth := lipgloss.Width(iconStr) + 1 + lipgloss.Width(styledName)
-				padNeeded := m.width - contentWidth - 4
-				if padNeeded < 0 {
-					padNeeded = 0
-				}
-				padStr := lipgloss.NewStyle().Background(cursorBg).Render(strings.Repeat(" ", padNeeded))
+					var styledName string
+					if m.filter != "" {
+						styledName = highlightFuzzyBg(name, m.matchIndices[entry.Name()], color, cursorBg)
+					} else {
+						styledName = lipgloss.NewStyle().Foreground(color).Background(cursorBg).Bold(true).Render(name)
+					}
 
-				b.WriteString(" " + openPill + iconStr + spacer + styledName + padStr + closePill + "\n")
+					iconPart := ""
+					if icon != "" {
+						iconPart = iconStr + spacer
+					}
+					contentWidth := lipgloss.Width(iconPart) + lipgloss.Width(styledName)
+					padNeeded := m.width - contentWidth - 4
+					if padNeeded < 0 {
+						padNeeded = 0
+					}
+					padStr := lipgloss.NewStyle().Background(cursorBg).Render(strings.Repeat(" ", padNeeded))
+
+					b.WriteString(" " + openPill + iconPart + styledName + padStr + closePill + "\n")
+				}
 			} else {
 				iconStr := lipgloss.NewStyle().Foreground(color).Render(icon)
 				var coloredName string
 				if m.filter != "" {
-					coloredName = highlightMatch(name, m.filter, color)
+					coloredName = highlightFuzzy(name, m.matchIndices[entry.Name()], color)
 				} else {
 					coloredName = lipgloss.NewStyle().Foreground(color).Render(name)
 				}
-				b.WriteString("  " + iconStr + " " + coloredName + "\n")
+				if icon == "" {
+					b.WriteString("  " + coloredName + "\n")
+				} else {
+					b.WriteString("  " + iconStr + " " + coloredName + "\n")
+				}
 			}
 		}
 
@@ -824,21 +1982,49 @@ func (m model) View() string {
 	}
 
 	if m.filtering || m.filter != "" {
-		b.WriteString(searchInput.Render(fmt.Sprintf("  search: %s_", m.filter)) + "\n")
+		count := fmt.Sprintf("%d / %d", len(m.entries), len(m.allEntries))
+		promptChar := "❯"
+		if !m.config.NerdFont {
+			promptChar = ">"
+		}
+		prompt := fmt.Sprintf("  %s %s_", promptChar, m.filter)
+		hint := count + "  esc clear"
+		pad := m.width - lipgloss.Width(prompt) - lipgloss.Width(hint) - 4
+		if pad < 1 {
+			pad = 1
+		}
+		promptStyle := searchInput
+		if !m.config.NerdFont {
+			promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		}
+		b.WriteString(promptStyle.Render(prompt) + strings.Repeat(" ", pad) + dimStyle.Render(hint) + "\n")
 	}
 
 	// --- Status bar ---
 	var statusLeft string
-	if m.filtering {
-		statusLeft = searchPillSep.Render(pillOpen) +
-			searchPillMain.Render(" SEARCH ") +
-			searchPillSep.Render(pillClose) +
-			dimStyle.Render("  ↑↓ move | → enter | ← back | / accept | enter cd | esc clear")
-	} else {
-		statusLeft = pillSep.Render(pillOpen) +
-			pillMain.Render(" NAV ") +
-			pillSep.Render(pillClose) +
-			dimStyle.Render("  hjkl/↑↓←→ | o open | c copy | ~ home | [.] hidden | / search | q quit")
+	switch {
+	case m.filtering:
+		var searchLabel string
+		if m.config.NerdFont {
+			searchLabel = searchPillSep.Render(m.pillOpenStr()) +
+				searchPillMain.Render(" SEARCH ") +
+				searchPillSep.Render(m.pillCloseStr())
+		} else {
+			searchLabel = dimStyle.Render("SEARCH")
+		}
+		statusLeft = searchLabel +
+			dimStyle.Render("  up/down move | right enter | left back | / accept | enter cd | esc clear")
+	default:
+		var navLabel string
+		if m.config.NerdFont {
+			navLabel = pillSep.Render(m.pillOpenStr()) +
+				pillMain.Render(" NAV ") +
+				pillSep.Render(m.pillCloseStr())
+		} else {
+			navLabel = dimStyle.Render("NAV")
+		}
+		statusLeft = navLabel +
+			dimStyle.Render("  hjkl | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
 	}
 
 	var rightParts []string
@@ -847,28 +2033,41 @@ func (m model) View() string {
 		rightParts = append(rightParts, flashStyle.Render(m.flash))
 	}
 
+	infoStyle := sizeStyle
+	chipStyle := hiddenBadge
+	posStyleUse := posStyle
+	if !m.config.NerdFont {
+		infoStyle = dimStyle
+		chipStyle = dimStyle
+		posStyleUse = dimStyle
+	}
+
 	if total > 0 && m.cursor < len(m.entries) {
 		entry := m.entries[m.cursor]
 		if entry.IsDir() {
 			count := countItems(filepath.Join(m.cwd, entry.Name()))
 			if count == 1 {
-				rightParts = append(rightParts, sizeStyle.Render("1 item"))
+				rightParts = append(rightParts, infoStyle.Render("1 item"))
 			} else {
-				rightParts = append(rightParts, sizeStyle.Render(fmt.Sprintf("%d items", count)))
+				rightParts = append(rightParts, infoStyle.Render(fmt.Sprintf("%d items", count)))
 			}
 		} else {
 			if info, err := entry.Info(); err == nil {
-				rightParts = append(rightParts, sizeStyle.Render(humanSize(info.Size())))
+				rightParts = append(rightParts, infoStyle.Render(humanSize(info.Size())))
 			}
 		}
 	}
 
+	if m.sortMode != sortName {
+		rightParts = append(rightParts, chipStyle.Render("["+m.sortMode.label()+"]"))
+	}
+
 	if m.showHidden {
-		rightParts = append(rightParts, hiddenBadge.Render("[H]"))
+		rightParts = append(rightParts, chipStyle.Render("[H]"))
 	}
 
 	if total > 0 {
-		rightParts = append(rightParts, posStyle.Render(fmt.Sprintf("%d/%d", m.cursor+1, total)))
+		rightParts = append(rightParts, posStyleUse.Render(fmt.Sprintf("%d/%d", m.cursor+1, total)))
 	}
 
 	statusRight := strings.Join(rightParts, "  ")
@@ -957,6 +2156,98 @@ func removeWrapper() bool {
 	return true
 }
 
+// --- Nerd Font prompt ---
+
+type nfChoice int
+
+const (
+	nfYes nfChoice = iota
+	nfNo
+)
+
+type nfModel struct {
+	cursor nfChoice
+	chosen nfChoice
+	done   bool
+}
+
+func (m nfModel) Init() tea.Cmd { return nil }
+
+func (m nfModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			m.done = true
+			m.chosen = -1
+			return m, tea.Quit
+		case "k", "up":
+			if m.cursor > 0 {
+				m.cursor--
+			} else {
+				m.cursor = nfNo
+			}
+		case "j", "down":
+			if m.cursor < nfNo {
+				m.cursor++
+			} else {
+				m.cursor = nfYes
+			}
+		case "y", "Y":
+			m.done = true
+			m.chosen = nfYes
+			return m, tea.Quit
+		case "n", "N":
+			m.done = true
+			m.chosen = nfNo
+			return m, tea.Quit
+		case "enter":
+			m.done = true
+			m.chosen = m.cursor
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m nfModel) View() string {
+	var b strings.Builder
+	b.WriteString("\n  Does your terminal use a Nerd Font?\n\n")
+	b.WriteString("  Nerd Fonts give nav file icons and a rounded cursor.\n")
+	b.WriteString("  Without one, those characters render as ?? boxes.\n\n")
+	b.WriteString("  If unsure: pick No. You'll get a clean plain-text UI.\n")
+	b.WriteString("  Get one: brew install --cask font-jetbrains-mono-nerd-font\n\n")
+	options := []struct {
+		label string
+		desc  string
+	}{
+		{"Yes", "I have a Nerd Font installed (icons + pretty UI)"},
+		{"No / not sure", "Plain text mode (clean caret-style)"},
+	}
+	for i, opt := range options {
+		cursor := "  "
+		if nfChoice(i) == m.cursor {
+			cursor = "> "
+		}
+		b.WriteString(fmt.Sprintf("%s%-16s %s\n", cursor, opt.label, opt.desc))
+	}
+	b.WriteString("\n  hjkl/arrows | y/n | enter select | esc skip\n")
+	return b.String()
+}
+
+func askNerdFont() (bool, bool) {
+	p := tea.NewProgram(nfModel{}, tea.WithOutput(os.Stderr))
+	result, err := p.Run()
+	if err != nil {
+		return false, false
+	}
+	nf := result.(nfModel)
+	if !nf.done || nf.chosen == -1 {
+		return false, false
+	}
+	return nf.chosen == nfYes, true
+}
+
 func runSetup() {
 	p := tea.NewProgram(setupModel{}, tea.WithOutput(os.Stderr))
 	result, err := p.Run()
@@ -973,6 +2264,22 @@ func runSetup() {
 		autoInstall()
 	case choiceManual:
 		showManual()
+	}
+
+	// After wrapper setup, ask about Nerd Font (saves to config)
+	hasNF, answered := askNerdFont()
+	if answered {
+		cfg := loadConfig()
+		cfg.NerdFont = hasNF
+		if err := saveConfig(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "  Note: could not save Nerd Font preference: %v\n", err)
+		} else {
+			if hasNF {
+				fmt.Fprintln(os.Stderr, "  Saved: Nerd Font icons ON")
+			} else {
+				fmt.Fprintln(os.Stderr, "  Saved: plain text mode (toggle in nav with , then change Nerd Font icons)")
+			}
+		}
 	}
 }
 
@@ -1018,7 +2325,7 @@ func main() {
 	}
 
 	m := initialModel()
-	p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	result, err := p.Run()
 	if err != nil {
