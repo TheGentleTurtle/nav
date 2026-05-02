@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.2"
+const version = "1.1.3"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -1810,10 +1810,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = m.cwd
 			return m, tea.Quit
 		case "R":
+			target := m.cwd
 			if len(m.entries) > 0 && m.cursor < len(m.entries) {
-				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
-				revealInFinder(target)
+				target = filepath.Join(m.cwd, m.entries[m.cursor].Name())
 			}
+			revealInFinder(target)
 			return m, nil
 		case ",":
 			m.mode = modeSettings
@@ -1851,10 +1852,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHidden = !m.showHidden
 			m.reload()
 		case "o":
+			target := m.cwd
 			if len(m.entries) > 0 && m.cursor < len(m.entries) {
-				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
-				exec.Command("open", target).Start()
+				target = filepath.Join(m.cwd, m.entries[m.cursor].Name())
 			}
+			exec.Command("open", target).Start()
 		case "c":
 			if len(m.entries) > 0 && m.cursor < len(m.entries) {
 				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
