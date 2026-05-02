@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.0"
+const version = "1.1.1"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -293,54 +293,126 @@ type clearFlashMsg struct{}
 
 // --- Setup menu model ---
 
-type setupChoice int
+// --- Setup flow (single state-machine program) ---
+
+type setupStep int
 
 const (
-	choiceAutomatic setupChoice = iota
-	choiceManual
+	stepWrapper setupStep = iota
+	stepShowManual
+	stepNerdFont
 )
 
-type setupModel struct {
-	cursor setupChoice
-	chosen setupChoice
-	done   bool
+type setupFlowModel struct {
+	step          setupStep
+	cursor        int
+	wrapperPicked string // "automatic" or "manual" or ""
+	nfPicked      string // "yes" or "no" or ""
+	wrapperMsg    string // result of autoInstall
+	cancelled     bool
+	finalMsg      string
 }
 
-func (m setupModel) Init() tea.Cmd { return nil }
+func (m setupFlowModel) Init() tea.Cmd { return nil }
 
-func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
+func (m setupFlowModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	key := keyMsg.String()
+
+	switch m.step {
+	case stepWrapper:
+		switch key {
 		case "q", "ctrl+c":
-			m.done = true
-			m.chosen = -1
+			m.cancelled = true
 			return m, tea.Quit
 		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			} else {
-				m.cursor = choiceManual
+				m.cursor = 1
 			}
 		case "j", "down":
-			if m.cursor < choiceManual {
+			if m.cursor < 1 {
 				m.cursor++
 			} else {
-				m.cursor = choiceAutomatic
+				m.cursor = 0
 			}
 		case "enter":
-			m.done = true
-			m.chosen = m.cursor
+			if m.cursor == 0 {
+				m.wrapperPicked = "automatic"
+				m.wrapperMsg = autoInstall()
+				m.step = stepNerdFont
+				m.cursor = 0
+			} else {
+				m.wrapperPicked = "manual"
+				m.step = stepShowManual
+				m.cursor = 0
+			}
+		}
+	case stepShowManual:
+		switch key {
+		case "q", "ctrl+c", "esc":
+			m.cancelled = true
+			return m, tea.Quit
+		case "enter", " ":
+			m.step = stepNerdFont
+			m.cursor = 0
+		}
+	case stepNerdFont:
+		switch key {
+		case "q", "ctrl+c", "esc":
+			m.cancelled = true
+			return m, tea.Quit
+		case "k", "up":
+			if m.cursor > 0 {
+				m.cursor--
+			} else {
+				m.cursor = 1
+			}
+		case "j", "down":
+			if m.cursor < 1 {
+				m.cursor++
+			} else {
+				m.cursor = 0
+			}
+		case "y", "Y":
+			m.nfPicked = "yes"
+			return m, tea.Quit
+		case "n", "N":
+			m.nfPicked = "no"
+			return m, tea.Quit
+		case "enter":
+			if m.cursor == 0 {
+				m.nfPicked = "yes"
+			} else {
+				m.nfPicked = "no"
+			}
 			return m, tea.Quit
 		}
 	}
 	return m, nil
 }
 
-func (m setupModel) View() string {
+func (m setupFlowModel) View() string {
+	switch m.step {
+	case stepWrapper:
+		return m.viewWrapper()
+	case stepShowManual:
+		return m.viewManual()
+	case stepNerdFont:
+		return m.viewNerdFont()
+	}
+	return ""
+}
+
+func (m setupFlowModel) viewWrapper() string {
 	var b strings.Builder
-	b.WriteString("  nav - terminal directory navigator\n\n")
-	b.WriteString("  nav needs a shell wrapper to change directories.\n")
+	b.WriteString("\n  nav - terminal directory navigator\n\n")
+	b.WriteString("  Step 1 of 2: Shell wrapper\n\n")
+	b.WriteString("  nav needs a shell wrapper to change your working directory.\n")
 	b.WriteString("  This adds a small function to your shell config so that\n")
 	b.WriteString("  pressing enter actually cd's into the selected folder.\n\n")
 	options := []struct {
@@ -352,12 +424,54 @@ func (m setupModel) View() string {
 	}
 	for i, opt := range options {
 		cursor := "  "
-		if setupChoice(i) == m.cursor {
+		if i == m.cursor {
 			cursor = "> "
 		}
 		b.WriteString(fmt.Sprintf("%s%-12s %s\n", cursor, opt.label, opt.desc))
 	}
 	b.WriteString("\n  hjkl/arrows | enter select | q quit\n")
+	return b.String()
+}
+
+func (m setupFlowModel) viewManual() string {
+	var b strings.Builder
+	b.WriteString("\n  Manual wrapper setup\n\n")
+	b.WriteString("  Add this to your ")
+	b.WriteString(detectShellRC())
+	b.WriteString(":\n\n")
+	b.WriteString(shellWrapper)
+	b.WriteString("\n\n")
+	b.WriteString("  Then restart your terminal or run: source ")
+	b.WriteString(detectShellRC())
+	b.WriteString("\n\n")
+	b.WriteString("  press enter to continue | esc to quit\n")
+	return b.String()
+}
+
+func (m setupFlowModel) viewNerdFont() string {
+	var b strings.Builder
+	b.WriteString("\n  nav - terminal directory navigator\n\n")
+	b.WriteString("  Step 2 of 2: Nerd Font\n\n")
+	b.WriteString("  Does your terminal use a Nerd Font?\n\n")
+	b.WriteString("  Nerd Fonts give nav file icons and a rounded cursor.\n")
+	b.WriteString("  Without one, those characters render as ?? boxes.\n\n")
+	b.WriteString("  If unsure: pick No. You'll get a clean plain-text UI.\n")
+	b.WriteString("  Get one: brew install --cask font-jetbrains-mono-nerd-font\n\n")
+	options := []struct {
+		label string
+		desc  string
+	}{
+		{"Yes", "I have a Nerd Font installed (icons + pretty UI)"},
+		{"No / not sure", "Plain text mode (clean caret-style)"},
+	}
+	for i, opt := range options {
+		cursor := "  "
+		if i == m.cursor {
+			cursor = "> "
+		}
+		b.WriteString(fmt.Sprintf("%s%-16s %s\n", cursor, opt.label, opt.desc))
+	}
+	b.WriteString("\n  hjkl/arrows | y/n | enter select | esc skip\n")
 	return b.String()
 }
 
@@ -2094,33 +2208,22 @@ func detectShellRC() string {
 	return filepath.Join(home, ".bashrc")
 }
 
-func autoInstall() bool {
+func autoInstall() string {
 	rcFile := detectShellRC()
 	content, err := os.ReadFile(rcFile)
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "  Could not read %s: %v\n", rcFile, err)
-		return false
+		return fmt.Sprintf("Could not read %s: %v", rcFile, err)
 	}
 	if strings.Contains(string(content), "NAV_WRAPPED") {
-		fmt.Fprintf(os.Stderr, "  Wrapper already installed in %s\n", rcFile)
-		return true
+		return fmt.Sprintf("Wrapper already installed in %s", rcFile)
 	}
 	f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Could not write to %s: %v\n", rcFile, err)
-		return false
+		return fmt.Sprintf("Could not write to %s: %v", rcFile, err)
 	}
 	defer f.Close()
 	f.WriteString("\n\n" + shellWrapper + "\n")
-	fmt.Fprintf(os.Stderr, "\n  Wrapper added to %s\n", rcFile)
-	fmt.Fprintf(os.Stderr, "  Restart your terminal or run: source %s\n\n", rcFile)
-	return true
-}
-
-func showManual() {
-	fmt.Fprint(os.Stderr, "\n  Add this to your shell config:\n\n")
-	fmt.Fprintln(os.Stderr, shellWrapper)
-	fmt.Fprintf(os.Stderr, "\n  Restart your terminal or run: source %s\n\n", detectShellRC())
+	return fmt.Sprintf("Wrapper added to %s", rcFile)
 }
 
 func removeWrapper() bool {
@@ -2156,131 +2259,50 @@ func removeWrapper() bool {
 	return true
 }
 
-// --- Nerd Font prompt ---
-
-type nfChoice int
-
-const (
-	nfYes nfChoice = iota
-	nfNo
-)
-
-type nfModel struct {
-	cursor nfChoice
-	chosen nfChoice
-	done   bool
-}
-
-func (m nfModel) Init() tea.Cmd { return nil }
-
-func (m nfModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c", "esc":
-			m.done = true
-			m.chosen = -1
-			return m, tea.Quit
-		case "k", "up":
-			if m.cursor > 0 {
-				m.cursor--
-			} else {
-				m.cursor = nfNo
-			}
-		case "j", "down":
-			if m.cursor < nfNo {
-				m.cursor++
-			} else {
-				m.cursor = nfYes
-			}
-		case "y", "Y":
-			m.done = true
-			m.chosen = nfYes
-			return m, tea.Quit
-		case "n", "N":
-			m.done = true
-			m.chosen = nfNo
-			return m, tea.Quit
-		case "enter":
-			m.done = true
-			m.chosen = m.cursor
-			return m, tea.Quit
-		}
-	}
-	return m, nil
-}
-
-func (m nfModel) View() string {
-	var b strings.Builder
-	b.WriteString("\n  Does your terminal use a Nerd Font?\n\n")
-	b.WriteString("  Nerd Fonts give nav file icons and a rounded cursor.\n")
-	b.WriteString("  Without one, those characters render as ?? boxes.\n\n")
-	b.WriteString("  If unsure: pick No. You'll get a clean plain-text UI.\n")
-	b.WriteString("  Get one: brew install --cask font-jetbrains-mono-nerd-font\n\n")
-	options := []struct {
-		label string
-		desc  string
-	}{
-		{"Yes", "I have a Nerd Font installed (icons + pretty UI)"},
-		{"No / not sure", "Plain text mode (clean caret-style)"},
-	}
-	for i, opt := range options {
-		cursor := "  "
-		if nfChoice(i) == m.cursor {
-			cursor = "> "
-		}
-		b.WriteString(fmt.Sprintf("%s%-16s %s\n", cursor, opt.label, opt.desc))
-	}
-	b.WriteString("\n  hjkl/arrows | y/n | enter select | esc skip\n")
-	return b.String()
-}
-
-func askNerdFont() (bool, bool) {
-	p := tea.NewProgram(nfModel{}, tea.WithOutput(os.Stderr))
-	result, err := p.Run()
-	if err != nil {
-		return false, false
-	}
-	nf := result.(nfModel)
-	if !nf.done || nf.chosen == -1 {
-		return false, false
-	}
-	return nf.chosen == nfYes, true
-}
-
 func runSetup() {
-	p := tea.NewProgram(setupModel{}, tea.WithOutput(os.Stderr))
+	p := tea.NewProgram(setupFlowModel{}, tea.WithOutput(os.Stderr), tea.WithAltScreen())
 	result, err := p.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	setup := result.(setupModel)
-	if !setup.done || setup.chosen == -1 {
+	flow := result.(setupFlowModel)
+	if flow.cancelled {
 		os.Exit(0)
 	}
-	switch setup.chosen {
-	case choiceAutomatic:
-		autoInstall()
-	case choiceManual:
-		showManual()
-	}
 
-	// After wrapper setup, ask about Nerd Font (saves to config)
-	hasNF, answered := askNerdFont()
-	if answered {
+	// Save Nerd Font preference if user chose
+	var nfMsg string
+	if flow.nfPicked != "" {
 		cfg := loadConfig()
-		cfg.NerdFont = hasNF
+		cfg.NerdFont = flow.nfPicked == "yes"
 		if err := saveConfig(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "  Note: could not save Nerd Font preference: %v\n", err)
+			nfMsg = fmt.Sprintf("Could not save Nerd Font preference: %v", err)
+		} else if cfg.NerdFont {
+			nfMsg = "Nerd Font icons: ON"
 		} else {
-			if hasNF {
-				fmt.Fprintln(os.Stderr, "  Saved: Nerd Font icons ON")
-			} else {
-				fmt.Fprintln(os.Stderr, "  Saved: plain text mode (toggle in nav with , then change Nerd Font icons)")
-			}
+			nfMsg = "Nerd Font icons: OFF (plain text mode)"
 		}
 	}
+
+	// Final summary in normal terminal (after alt screen exits)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  nav is set up.")
+	fmt.Fprintln(os.Stderr, "")
+	if flow.wrapperPicked == "automatic" && flow.wrapperMsg != "" {
+		fmt.Fprintln(os.Stderr, "  Wrapper:    "+flow.wrapperMsg)
+	} else if flow.wrapperPicked == "manual" {
+		fmt.Fprintln(os.Stderr, "  Wrapper:    add this to "+detectShellRC()+":")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, shellWrapper)
+	}
+	if nfMsg != "" {
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  Settings:   "+nfMsg)
+	}
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "  Restart your terminal or run: source "+detectShellRC())
+	fmt.Fprintln(os.Stderr, "")
 }
 
 func main() {
