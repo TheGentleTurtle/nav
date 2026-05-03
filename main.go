@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.4"
+const version = "1.1.5"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -38,7 +38,7 @@ nav() {
 const scrolloff = 3
 
 const helpText = `nav v` + version + ` — terminal directory navigator
-https://github.com/TheGentleTurtle/nav
+https://getnav.dev   |   https://github.com/TheGentleTurtle/nav
 
 Usage:
   nav                Open the file navigator
@@ -48,9 +48,9 @@ Usage:
   nav -u, --uninstall  Remove shell wrapper and uninstall nav
 
 Navigation:
-  hjkl / arrows        Navigate (cursor wraps)
-  l / right            Enter folder
-  h / left             Go back
+  hjkl / ↑↓←→         Navigate (cursor wraps)
+  l / →                Enter folder
+  h / ←                Go back
   ~                    Jump to home directory
 
 Action:
@@ -95,7 +95,7 @@ Search mode:
   esc                  Clear filter
   backspace            Delete last character
 
-More info: https://github.com/TheGentleTurtle/nav
+More info: https://getnav.dev
 
 Shell wrapper:
   nav requires a shell wrapper to change directories.
@@ -429,7 +429,7 @@ func (m setupFlowModel) viewWrapper() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-12s %s\n", cursor, opt.label, opt.desc))
 	}
-	b.WriteString("\n  hjkl/arrows | enter select | q quit\n")
+	b.WriteString("\n  hjkl/↑↓←→ | enter select | q quit\n")
 	return b.String()
 }
 
@@ -471,7 +471,7 @@ func (m setupFlowModel) viewNerdFont() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-16s %s\n", cursor, opt.label, opt.desc))
 	}
-	b.WriteString("\n  hjkl/arrows | y/n | enter select | esc skip\n")
+	b.WriteString("\n  hjkl/↑↓←→ | y/n | enter select | esc skip\n")
 	return b.String()
 }
 
@@ -1212,7 +1212,7 @@ type helpSection struct {
 func helpSections() []helpSection {
 	return []helpSection{
 		{"Navigation", []helpEntry{
-			{"hjkl / arrows", "Move (l or right enters folder, h or left goes back)"},
+			{"hjkl / ↑↓←→", "Move (l or → enters folder, h or ← goes back)"},
 			{"~", "Jump to home directory"},
 		}},
 		{"Action", []helpEntry{
@@ -1271,8 +1271,9 @@ func renderedHelpLines() []string {
 	var lines []string
 	lines = append(lines, "")
 	lines = append(lines, "  "+titleStyle.Render("nav v"+version+" — terminal directory navigator"))
-	lines = append(lines, "  "+linkStyle.Render("https://github.com/TheGentleTurtle/nav"))
-	lines = append(lines, "  "+subStyle.Render("Issues & feature requests: ")+linkStyle.Render("https://github.com/TheGentleTurtle/nav/issues"))
+	lines = append(lines, "  "+linkStyle.Render("https://getnav.dev"))
+	lines = append(lines, "  "+subStyle.Render("Source:  ")+linkStyle.Render("https://github.com/TheGentleTurtle/nav"))
+	lines = append(lines, "  "+subStyle.Render("Issues:  ")+linkStyle.Render("https://github.com/TheGentleTurtle/nav/issues"))
 	lines = append(lines, "")
 	for _, sec := range helpSections() {
 		lines = append(lines, "  "+sectionStyle.Render(sec.title))
@@ -2140,7 +2141,7 @@ func (m model) View() string {
 			navLabel = dimStyle.Render("NAV")
 		}
 		statusLeft = navLabel +
-			dimStyle.Render("  hjkl | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
+			dimStyle.Render("  hjkl/↑↓←→ | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
 	}
 
 	var rightParts []string

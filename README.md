@@ -2,6 +2,8 @@
 
 A tiny terminal file navigator. Browse folders with vim keys, press enter, and your shell `cd`s into it.
 
+**Website:** [getnav.dev](https://getnav.dev)
+
 ## Install
 
 ### Homebrew
