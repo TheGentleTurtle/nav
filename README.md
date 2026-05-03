@@ -4,6 +4,8 @@ A tiny terminal file navigator. Browse folders with vim keys, press enter, and y
 
 **Website:** [getnav.dev](https://getnav.dev)
 
+![nav help screen](assets/help.png)
+
 ## Install
 
 ### Homebrew
