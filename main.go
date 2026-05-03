@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.3"
+const version = "1.1.4"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -42,10 +42,10 @@ https://github.com/TheGentleTurtle/nav
 
 Usage:
   nav                Open the file navigator
-  nav --help         Show this help
-  nav --version      Print version
-  nav --setup        Run the shell wrapper setup
-  nav --uninstall    Remove shell wrapper and uninstall nav
+  nav -h, --help     Show this help
+  nav -v, --version  Print version
+  nav -s, --setup    Run the shell wrapper setup
+  nav -u, --uninstall  Remove shell wrapper and uninstall nav
 
 Navigation:
   hjkl / arrows        Navigate (cursor wraps)
@@ -2228,12 +2228,13 @@ func autoInstall() string {
 	return fmt.Sprintf("Wrapper added to %s", rcFile)
 }
 
-func removeWrapper() bool {
-	rcFile := detectShellRC()
+func removeWrapperFromFile(rcFile string) (removed bool, err error) {
 	content, err := os.ReadFile(rcFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Could not read %s: %v\n", rcFile, err)
-		return false
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	text := string(content)
 	startMarker := "# --- nav - terminal directory navigator ---"
@@ -2241,8 +2242,7 @@ func removeWrapper() bool {
 	startIdx := strings.Index(text, startMarker)
 	endIdx := strings.Index(text, endMarker)
 	if startIdx == -1 || endIdx == -1 {
-		fmt.Fprintln(os.Stderr, "  Shell wrapper not found in "+rcFile)
-		return false
+		return false, nil
 	}
 	endIdx += len(endMarker)
 	if endIdx < len(text) && text[endIdx] == '\n' {
@@ -2252,13 +2252,40 @@ func removeWrapper() bool {
 		startIdx--
 	}
 	newContent := text[:startIdx] + text[endIdx:]
-	err = os.WriteFile(rcFile, []byte(newContent), 0644)
+	if err := os.WriteFile(rcFile, []byte(newContent), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func removeWrapper() bool {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Could not write to %s: %v\n", rcFile, err)
+		fmt.Fprintf(os.Stderr, "  Could not find home directory: %v\n", err)
 		return false
 	}
-	fmt.Fprintf(os.Stderr, "  Removed shell wrapper from %s\n", rcFile)
-	return true
+	candidates := []string{
+		filepath.Join(home, ".zshrc"),
+		filepath.Join(home, ".bashrc"),
+		filepath.Join(home, ".bash_profile"),
+		filepath.Join(home, ".profile"),
+	}
+	any := false
+	for _, rc := range candidates {
+		ok, err := removeWrapperFromFile(rc)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  Could not modify %s: %v\n", rc, err)
+			continue
+		}
+		if ok {
+			fmt.Fprintf(os.Stderr, "  Removed shell wrapper from %s\n", rc)
+			any = true
+		}
+	}
+	if !any {
+		fmt.Fprintln(os.Stderr, "  No nav wrapper found in ~/.zshrc, ~/.bashrc, ~/.bash_profile, or ~/.profile")
+	}
+	return any
 }
 
 func runSetup() {
@@ -2318,17 +2345,23 @@ func main() {
 		case "--version", "-v":
 			fmt.Fprintf(os.Stderr, "nav v%s\n", version)
 			os.Exit(0)
-		case "--setup":
+		case "--setup", "-s":
 			runSetup()
 			os.Exit(0)
-		case "--uninstall":
+		case "--uninstall", "-u":
 			fmt.Fprintln(os.Stderr, "  Uninstalling nav...")
 			removeWrapper()
-			fmt.Fprintln(os.Stderr, "  Running: brew uninstall nav")
-			cmd := exec.Command("brew", "uninstall", "nav")
+			fmt.Fprintln(os.Stderr, "  Running: brew uninstall thegentleturtle/tap/nav")
+			cmd := exec.Command("brew", "uninstall", "thegentleturtle/tap/nav")
 			cmd.Stdout = os.Stderr
 			cmd.Stderr = os.Stderr
-			cmd.Run()
+			if err := cmd.Run(); err != nil {
+				// Fallback to short name (works if not in tap)
+				cmd2 := exec.Command("brew", "uninstall", "nav")
+				cmd2.Stdout = os.Stderr
+				cmd2.Stderr = os.Stderr
+				cmd2.Run()
+			}
 			fmt.Fprintln(os.Stderr, "\n  nav has been uninstalled. Restart your terminal to apply changes.")
 			os.Exit(0)
 		default:
