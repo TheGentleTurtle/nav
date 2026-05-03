@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.5"
+const version = "1.1.6"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -48,7 +48,7 @@ Usage:
   nav -u, --uninstall  Remove shell wrapper and uninstall nav
 
 Navigation:
-  hjkl / ↑↓←→         Navigate (cursor wraps)
+  hjkl / ↑ ↓ ← →     Navigate (cursor wraps)
   l / →                Enter folder
   h / ←                Go back
   ~                    Jump to home directory
@@ -429,7 +429,7 @@ func (m setupFlowModel) viewWrapper() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-12s %s\n", cursor, opt.label, opt.desc))
 	}
-	b.WriteString("\n  hjkl/↑↓←→ | enter select | q quit\n")
+	b.WriteString("\n  hjkl / ↑ ↓ ← → | enter select | q quit\n")
 	return b.String()
 }
 
@@ -471,7 +471,7 @@ func (m setupFlowModel) viewNerdFont() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%-16s %s\n", cursor, opt.label, opt.desc))
 	}
-	b.WriteString("\n  hjkl/↑↓←→ | y/n | enter select | esc skip\n")
+	b.WriteString("\n  hjkl / ↑ ↓ ← → | y/n | enter select | esc skip\n")
 	return b.String()
 }
 
@@ -1188,7 +1188,7 @@ func (m model) renderTree() string {
 		b.WriteString("\n")
 	}
 
-	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ←→ depth | f files | . hidden | i ignored | m format | c copy | esc back",
+	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ← → depth | f files | . hidden | i ignored | m format | c copy | esc back",
 		m.treeCount))
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
@@ -1212,7 +1212,7 @@ type helpSection struct {
 func helpSections() []helpSection {
 	return []helpSection{
 		{"Navigation", []helpEntry{
-			{"hjkl / ↑↓←→", "Move (l or → enters folder, h or ← goes back)"},
+			{"hjkl / ↑ ↓ ← →", "Move (l or → enters folder, h or ← goes back)"},
 			{"~", "Jump to home directory"},
 		}},
 		{"Action", []helpEntry{
@@ -1234,7 +1234,7 @@ func helpSections() []helpSection {
 			{"q", "Quit"},
 		}},
 		{"Tree mode", []helpEntry{
-			{"←→", "Decrease/increase depth (0 → ∞ → 0)"},
+			{"← →", "Decrease/increase depth (0 → ∞ → 0)"},
 			{"f", "Toggle files vs folders only"},
 			{".", "Toggle hidden files"},
 			{"i", "Toggle skip ignored (node_modules, .git, ...)"},
@@ -1253,7 +1253,7 @@ func helpSections() []helpSection {
 		{"Settings mode", []helpEntry{
 			{"j/k or ↑↓", "Move cursor"},
 			{"space / enter", "Toggle bool / cycle enum"},
-			{"←→", "Cycle enum value"},
+			{"← →", "Cycle enum value"},
 			{"S", "Save and exit"},
 			{"esc", "Cancel without saving"},
 		}},
@@ -1656,7 +1656,7 @@ func (m model) renderSettings() string {
 		return b.String()
 	}
 
-	hint := dimStyle.Render("  ↑↓ move | space toggle | ←→ cycle | S save | esc cancel")
+	hint := dimStyle.Render("  ↑↓ move | space toggle | ← → cycle | S save | esc cancel")
 	b.WriteString(hint)
 	return b.String()
 }
@@ -2141,7 +2141,7 @@ func (m model) View() string {
 			navLabel = dimStyle.Render("NAV")
 		}
 		statusLeft = navLabel +
-			dimStyle.Render("  hjkl/↑↓←→ | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
+			dimStyle.Render("  hjkl / ↑ ↓ ← → | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
 	}
 
 	var rightParts []string
