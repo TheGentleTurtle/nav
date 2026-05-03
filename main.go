@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.7"
+const version = "1.1.8"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -1212,7 +1212,7 @@ type helpSection struct {
 func helpSections() []helpSection {
 	return []helpSection{
 		{"Navigation", []helpEntry{
-			{"hjkl / ↑↓←→", "Move (l or → enters folder, h or ← goes back)"},
+			{"hjkl / ↑↓", "Move (l or → enters folder, h or ← goes back)"},
 			{"~", "Jump to home directory"},
 		}},
 		{"Action", []helpEntry{
