@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.2.0"
+const version = "1.2.1"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -51,6 +51,7 @@ Navigation:
   hjkl / ↑↓←→         Navigate (cursor wraps)
   l / →                Enter folder
   h / ←                Go back
+  J/K or shift+↑↓     Jump 10 items at a time
   ~                    Jump to home directory
 
 Action:
@@ -72,6 +73,9 @@ System:
   q                    Quit
 
 Tree mode:
+  j/k or up/down       Scroll one line
+  J/K or shift+up/down Scroll 10 lines
+  g / G                Top / bottom
   left/right           Decrease/increase depth (0 -> infinite -> 0)
   f                    Toggle files vs folders only
   .                    Toggle hidden files
@@ -648,6 +652,7 @@ type model struct {
 	treeTrunc    bool
 	treeHitLimit bool
 	treeMaxDepth int
+	treeScroll   int
 
 	helpScroll int
 
@@ -1071,12 +1076,58 @@ func (m *model) rebuildTree() {
 	m.treeTrunc = r.truncated
 	m.treeHitLimit = r.hitLimit
 	m.treeMaxDepth = r.maxDepth
+	m.treeScroll = 0
+}
+
+func (m model) treeViewportHeight() int {
+	vh := m.height - 6
+	if vh < 1 {
+		vh = 1
+	}
+	return vh
+}
+
+func (m model) treeMaxScroll() int {
+	total := strings.Count(m.treeOutput, "\n")
+	max := total - m.treeViewportHeight()
+	if max < 0 {
+		max = 0
+	}
+	return max
 }
 
 func (m model) updateTree(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "esc", "q":
 		m.mode = modeNormal
+		return m, nil
+	case "j", "down":
+		if m.treeScroll < m.treeMaxScroll() {
+			m.treeScroll++
+		}
+		return m, nil
+	case "k", "up":
+		if m.treeScroll > 0 {
+			m.treeScroll--
+		}
+		return m, nil
+	case "J", "shift+down":
+		m.treeScroll += 10
+		if max := m.treeMaxScroll(); m.treeScroll > max {
+			m.treeScroll = max
+		}
+		return m, nil
+	case "K", "shift+up":
+		m.treeScroll -= 10
+		if m.treeScroll < 0 {
+			m.treeScroll = 0
+		}
+		return m, nil
+	case "g":
+		m.treeScroll = 0
+		return m, nil
+	case "G":
+		m.treeScroll = m.treeMaxScroll()
 		return m, nil
 	case "left":
 		// cycle: ∞ → max+ → ... → 1 → 0 → ∞
@@ -1198,26 +1249,34 @@ func (m model) renderTree() string {
 	b.WriteString("  " + chipStyle.Render(fmt.Sprintf("depth: %s   files: %s   hidden: %s   format: %s   ignored: %s",
 		depthStr, filesStr, hiddenStr, m.tree.format, ignoredStr)) + "\n\n")
 
-	vh := m.height - 6
-	if vh < 1 {
-		vh = 1
-	}
+	vh := m.treeViewportHeight()
+	allLines := strings.Split(m.treeOutput, "\n")
+	totalLines := len(allLines)
 
-	lines := strings.Split(m.treeOutput, "\n")
-	if len(lines) > vh {
-		lines = lines[:vh]
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("  ... %d more lines (copy to see all)", len(strings.Split(m.treeOutput, "\n"))-vh)))
+	start := m.treeScroll
+	if start > totalLines {
+		start = totalLines
 	}
-	for _, line := range lines {
+	end := start + vh
+	if end > totalLines {
+		end = totalLines
+	}
+	visible := allLines[start:end]
+
+	for _, line := range visible {
 		b.WriteString("  " + line + "\n")
 	}
 
-	for i := len(lines); i < vh; i++ {
+	for i := len(visible); i < vh; i++ {
 		b.WriteString("\n")
 	}
 
-	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
-		m.treeCount))
+	scrollInfo := ""
+	if totalLines > vh {
+		scrollInfo = fmt.Sprintf("  %d/%d  |", end, totalLines)
+	}
+	hint := dimStyle.Render(fmt.Sprintf("%s  %d items  |  ↑↓/jk scroll | JK by 10 | g/G top/bottom | ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
+		scrollInfo, m.treeCount))
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
 	}
@@ -1241,6 +1300,7 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{"Navigation", []helpEntry{
 			{"hjkl / ↑↓", "Move (l or → enters folder, h or ← goes back)"},
+			{"J/K or shift+↑↓", "Jump 10 items at a time"},
 			{"~", "Jump to home directory"},
 		}},
 		{"Action", []helpEntry{
@@ -1262,6 +1322,9 @@ func helpSections() []helpSection {
 			{"q", "Quit"},
 		}},
 		{"Tree mode", []helpEntry{
+			{"j/k or ↑↓", "Scroll one line"},
+			{"J/K or shift+↑↓", "Scroll 10 lines"},
+			{"g / G", "Top / bottom"},
 			{"←→", "Decrease/increase depth (0 → ∞ → 0)"},
 			{"f", "Toggle files vs folders only"},
 			{".", "Toggle hidden files"},
@@ -1806,6 +1869,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < m.totalItems()-1 {
 				m.cursor++
 			} else {
+				m.cursor = 0
+			}
+			m.fixOffset()
+		case "J", "shift+down":
+			m.cursor += 10
+			if m.cursor > m.totalItems()-1 {
+				m.cursor = m.totalItems() - 1
+			}
+			m.fixOffset()
+		case "K", "shift+up":
+			m.cursor -= 10
+			if m.cursor < 0 {
 				m.cursor = 0
 			}
 			m.fixOffset()
