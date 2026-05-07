@@ -8,8 +8,8 @@ AGENTS.md
 docs/
 scripts/
 
-# assets: only push screenshot + showcase.mp4 + showcase.gif; exclude source media
+# assets: only push preview + showcase.mp4 + showcase.gif; exclude source media
 assets/*
-!assets/screenshot.png
+!assets/preview.png
 !assets/showcase.mp4
 !assets/showcase.gif
