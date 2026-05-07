@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.1.8"
+const version = "1.2.0"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -78,6 +78,7 @@ Tree mode:
   i                    Toggle skip ignored (node_modules, .git, etc.)
   m                    Toggle format: ASCII or Markdown
   c                    Copy tree to clipboard
+  S                    Save tree to file (.txt or .md)
   esc/q                Back to file list
 
 Settings:
@@ -899,7 +900,9 @@ func revealInFinder(path string) error {
 
 // --- Tree ---
 
-const treeMaxItems = 500
+// Sanity cap so a stray tree of /System or similar doesn't lock up the UI.
+// Far above any realistic project size; "/" or massive node_modules will still hit it.
+const treeMaxItems = 100000
 
 var treeIgnored = map[string]bool{
 	"node_modules": true,
@@ -1128,8 +1131,33 @@ func (m model) updateTree(key string) (tea.Model, tea.Cmd) {
 			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
 		}
 		return m, nil
+	case "S":
+		ext := "txt"
+		if m.tree.format == "md" {
+			ext = "md"
+		}
+		defaultName := filepath.Base(m.tree.root) + "-tree." + ext
+		path, err := chooseSavePath(defaultName)
+		if err != nil || path == "" {
+			return m, nil
+		}
+		if err := os.WriteFile(path, []byte(m.treeOutput), 0644); err != nil {
+			m.flash = "save failed: " + err.Error()
+		} else {
+			m.flash = "saved: " + path
+		}
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
 	}
 	return m, nil
+}
+
+func chooseSavePath(defaultName string) (string, error) {
+	script := fmt.Sprintf(`POSIX path of (choose file name with prompt "Save tree" default name %q)`, defaultName)
+	out, err := exec.Command("osascript", "-e", script).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (m model) renderTree() string {
@@ -1188,7 +1216,7 @@ func (m model) renderTree() string {
 		b.WriteString("\n")
 	}
 
-	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ←→ depth | f files | . hidden | i ignored | m format | c copy | esc back",
+	hint := dimStyle.Render(fmt.Sprintf("  %d items  |  ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
 		m.treeCount))
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
@@ -1240,6 +1268,7 @@ func helpSections() []helpSection {
 			{"i", "Toggle skip ignored (node_modules, .git, ...)"},
 			{"m", "Toggle format: ASCII / Markdown"},
 			{"c", "Copy tree to clipboard"},
+			{"S", "Save tree to file (.txt or .md)"},
 			{"esc / q", "Back to file list"},
 		}},
 		{"Search mode", []helpEntry{
