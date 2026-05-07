@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.2.2"
+const version = "1.3.0"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -86,8 +86,10 @@ Tree mode:
 
 Settings:
   Settings persist to ~/.config/nav/config.json
-  Configurable: display (hidden, folders-on-top, sort), behavior (smart Enter),
-    tree defaults (depth, files, hidden, skip-ignored, format)
+  Configurable: display (hidden, folders-on-top, sort, nerd font, shortcut hints),
+    behavior (smart Enter), tree defaults (depth, files, hidden, skip-ignored, format)
+  Shortcut hints: none / minimal (default) / full — controls how much keyboard help
+    is shown in the bottom status bars across nav, search, tree, settings, and help.
   Smart Enter: when on, Enter on a file opens it instead of cd'ing
 
 Search mode:
@@ -487,12 +489,24 @@ type Config struct {
 	SortMode     string `json:"sort_mode"`
 	SmartEnter   bool   `json:"smart_enter"`
 	NerdFont     bool   `json:"nerd_font"`
+	HintLevel    string `json:"hint_level"` // "none", "minimal", "full"
 
 	TreeDepth   int    `json:"tree_depth"` // -1 = ∞
 	TreeFiles   bool   `json:"tree_files"`
 	TreeHidden  bool   `json:"tree_hidden"`
 	TreeIgnored bool   `json:"tree_skip_ignored"`
 	TreeFormat  string `json:"tree_format"` // "ascii" or "md"
+}
+
+func (m model) hint(none, minimal, full string) string {
+	switch m.config.HintLevel {
+	case "none":
+		return none
+	case "full":
+		return full
+	default:
+		return minimal
+	}
 }
 
 func detectNerdFont() bool {
@@ -512,6 +526,7 @@ func defaultConfig() Config {
 		SortMode:     "name",
 		SmartEnter:   false,
 		NerdFont:     detectNerdFont(),
+		HintLevel:    "minimal",
 
 		TreeDepth:   0,
 		TreeFiles:   true,
@@ -1274,8 +1289,12 @@ func (m model) renderTree() string {
 	if totalLines > vh {
 		scrollInfo = fmt.Sprintf("  %d/%d  |", end, totalLines)
 	}
-	hint := dimStyle.Render(fmt.Sprintf("%s  %d items  |  ↑↓/jk scroll | g/G top/bottom | ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
-		scrollInfo, m.treeCount))
+	hintText := m.hint(
+		fmt.Sprintf("%s  %d items", scrollInfo, m.treeCount),
+		fmt.Sprintf("%s  %d items  |  ←→ depth | m format | c copy | S save | esc back", scrollInfo, m.treeCount),
+		fmt.Sprintf("%s  %d items  |  ↑↓/jk scroll | g/G top/bottom | ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back", scrollInfo, m.treeCount),
+	)
+	hint := dimStyle.Render(hintText)
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
 	}
@@ -1430,10 +1449,15 @@ func (m model) renderHelp() string {
 	for i := end - m.helpScroll; i < vh; i++ {
 		b.WriteString("\n")
 	}
-	hint := "  ↑↓/jk scroll | g top | G bottom | esc/q/? back"
+	scrollCount := ""
 	if len(lines) > vh {
-		hint += fmt.Sprintf("   %d/%d", m.helpScroll+1, len(lines)-vh+1)
+		scrollCount = fmt.Sprintf("   %d/%d", m.helpScroll+1, len(lines)-vh+1)
 	}
+	hint := m.hint(
+		"  esc back"+scrollCount,
+		"  ↑↓ scroll | esc back"+scrollCount,
+		"  ↑↓/jk scroll | g top | G bottom | esc/q/? back"+scrollCount,
+	)
 	b.WriteString(dimStyle.Render(hint))
 	return b.String()
 }
@@ -1452,6 +1476,7 @@ func settingsFields() []settingField {
 		{"Folders always on top", "Display", "bool"},
 		{"Sort mode (default)", "Display", "sort"},
 		{"Nerd Font icons", "Display", "bool"},
+		{"Shortcut hints", "Display", "hintLevel"},
 		{"Smart Enter (open files instead of cd)", "Behavior", "bool"},
 		{"Default depth", "Tree defaults", "treeDepth"},
 		{"Include files (default)", "Tree defaults", "bool"},
@@ -1548,13 +1573,13 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 				m.settingsDraft.FoldersOnTop = !m.settingsDraft.FoldersOnTop
 			case 3:
 				m.settingsDraft.NerdFont = !m.settingsDraft.NerdFont
-			case 4:
+			case 5:
 				m.settingsDraft.SmartEnter = !m.settingsDraft.SmartEnter
-			case 6:
-				m.settingsDraft.TreeFiles = !m.settingsDraft.TreeFiles
 			case 7:
-				m.settingsDraft.TreeHidden = !m.settingsDraft.TreeHidden
+				m.settingsDraft.TreeFiles = !m.settingsDraft.TreeFiles
 			case 8:
+				m.settingsDraft.TreeHidden = !m.settingsDraft.TreeHidden
+			case 9:
 				m.settingsDraft.TreeIgnored = !m.settingsDraft.TreeIgnored
 			}
 		case "sort":
@@ -1575,6 +1600,15 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 				m.settingsDraft.TreeFormat = "md"
 			} else {
 				m.settingsDraft.TreeFormat = "ascii"
+			}
+		case "hintLevel":
+			switch m.settingsDraft.HintLevel {
+			case "none":
+				m.settingsDraft.HintLevel = "minimal"
+			case "minimal":
+				m.settingsDraft.HintLevel = "full"
+			default:
+				m.settingsDraft.HintLevel = "none"
 			}
 		case "action":
 			switch f.label {
@@ -1615,6 +1649,15 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 			} else {
 				m.settingsDraft.TreeFormat = "ascii"
 			}
+		case "hintLevel":
+			switch m.settingsDraft.HintLevel {
+			case "minimal":
+				m.settingsDraft.HintLevel = "none"
+			case "full":
+				m.settingsDraft.HintLevel = "minimal"
+			default:
+				m.settingsDraft.HintLevel = "full"
+			}
 		}
 		return m, nil
 	case "right":
@@ -1635,6 +1678,15 @@ func (m model) updateSettings(key string) (tea.Model, tea.Cmd) {
 				m.settingsDraft.TreeFormat = "md"
 			} else {
 				m.settingsDraft.TreeFormat = "ascii"
+			}
+		case "hintLevel":
+			switch m.settingsDraft.HintLevel {
+			case "none":
+				m.settingsDraft.HintLevel = "minimal"
+			case "minimal":
+				m.settingsDraft.HintLevel = "full"
+			default:
+				m.settingsDraft.HintLevel = "none"
 			}
 		}
 		return m, nil
@@ -1690,13 +1742,13 @@ func (m model) renderSettings() string {
 				on = m.settingsDraft.FoldersOnTop
 			case 3:
 				on = m.settingsDraft.NerdFont
-			case 4:
+			case 5:
 				on = m.settingsDraft.SmartEnter
-			case 6:
-				on = m.settingsDraft.TreeFiles
 			case 7:
-				on = m.settingsDraft.TreeHidden
+				on = m.settingsDraft.TreeFiles
 			case 8:
+				on = m.settingsDraft.TreeHidden
+			case 9:
 				on = m.settingsDraft.TreeIgnored
 			}
 			if on {
@@ -1714,6 +1766,12 @@ func (m model) renderSettings() string {
 			value = enumStyle.Render("[ ‹ " + d + " › ]")
 		case "treeFormat":
 			value = enumStyle.Render("[ ‹ " + m.settingsDraft.TreeFormat + " › ]")
+		case "hintLevel":
+			level := m.settingsDraft.HintLevel
+			if level == "" {
+				level = "minimal"
+			}
+			value = enumStyle.Render("[ ‹ " + level + " › ]")
 		case "action":
 			value = enumStyle.Render("[ enter ]")
 		}
@@ -1746,7 +1804,11 @@ func (m model) renderSettings() string {
 		return b.String()
 	}
 
-	hint := dimStyle.Render("  ↑↓ move | space toggle | ←→ cycle | S save | esc cancel")
+	hint := dimStyle.Render(m.hint(
+		"",
+		"  ↑↓ move | space toggle | ←→ cycle | S save | esc cancel",
+		"  ↑↓ move | space toggle | ←→ cycle | S save | esc cancel",
+	))
 	b.WriteString(hint)
 	return b.String()
 }
@@ -2235,7 +2297,11 @@ func (m model) View() string {
 			searchLabel = dimStyle.Render("SEARCH")
 		}
 		statusLeft = searchLabel +
-			dimStyle.Render("  ↑↓ move | → enter | ← back | / accept | enter cd | esc clear")
+			dimStyle.Render(m.hint(
+				"",
+				"  type to filter | / accept | esc clear",
+				"  ↑↓ move | → enter | ← back | / accept | enter cd | esc clear",
+			))
 	default:
 		var navLabel string
 		if m.config.NerdFont {
@@ -2246,7 +2312,11 @@ func (m model) View() string {
 			navLabel = dimStyle.Render("NAV")
 		}
 		statusLeft = navLabel +
-			dimStyle.Render("  hjkl/↑↓←→ | enter cd | ~ home | g top | o open | R reveal | t tree | s sort | / find | , settings | q")
+			dimStyle.Render(m.hint(
+				"",
+				"  hjkl/↑↓←→ | g top | t tree | s sort | / find | , settings | ? help",
+				"  hjkl/↑↓←→ | enter cd | ~ home | g top | o open | R reveal | t tree | s sort | / find | , settings | ? help | q",
+			))
 	}
 
 	var rightParts []string

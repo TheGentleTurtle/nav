@@ -119,6 +119,7 @@ Press `,` inside nav to open a settings panel. Settings persist to `~/.config/na
 - Folders always on top
 - Sort mode (default): name / modified / size
 - Nerd Font icons — auto-detected on first run; toggle off if you see `??` boxes
+- Shortcut hints — `none` / `minimal` (default) / `full` — controls how much keyboard help is shown in the bottom status bars
 
 **Behavior**
 - Smart Enter — when on, pressing Enter on a file opens it instead of cd'ing
