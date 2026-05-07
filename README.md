@@ -75,6 +75,7 @@ nav --uninstall # remove wrapper and uninstall Homebrew formula
 | `hjkl` / `↑↓←→` | Navigate (cursor wraps) |
 | `l` / `→` | Enter folder |
 | `h` / `←` | Go back |
+| `g` | Jump to top |
 | `Enter` | **cd** — folder = into it; file = current dir |
 | `Space` | cd into current directory (ignore cursor) |
 | `o` | Open selected item in the default app |
@@ -96,15 +97,18 @@ Press `t` on a folder to view its file tree. Inside tree view:
 
 | Key | Action |
 |-----|--------|
-| `←` / `→` | Decrease/increase depth (1 → ∞ → 1) |
+| `j` / `k` or `↑↓` | Scroll one line |
+| `g` / `G` | Top / bottom |
+| `←` / `→` | Decrease/increase depth (0 → ∞ → 0) |
 | `f` | Toggle files vs folders only |
 | `.` | Toggle hidden files |
 | `i` | Toggle skip-ignored (node_modules, .git, etc.) |
 | `m` | Toggle format: ASCII ↔ Markdown |
 | `c` | Copy tree to clipboard |
+| `S` | Save tree to file (.txt or .md) |
 | `esc` / `q` | Back to file list |
 
-Trees are capped at 500 items to keep things fast.
+Trees show up to 100,000 items.
 
 ## Settings
 

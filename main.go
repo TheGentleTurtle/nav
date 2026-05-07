@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.2.1"
+const version = "1.2.2"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -51,7 +51,7 @@ Navigation:
   hjkl / ↑↓←→         Navigate (cursor wraps)
   l / →                Enter folder
   h / ←                Go back
-  J/K or shift+↑↓     Jump 10 items at a time
+  g                    Jump to top
   ~                    Jump to home directory
 
 Action:
@@ -74,7 +74,6 @@ System:
 
 Tree mode:
   j/k or up/down       Scroll one line
-  J/K or shift+up/down Scroll 10 lines
   g / G                Top / bottom
   left/right           Decrease/increase depth (0 -> infinite -> 0)
   f                    Toggle files vs folders only
@@ -1275,7 +1274,7 @@ func (m model) renderTree() string {
 	if totalLines > vh {
 		scrollInfo = fmt.Sprintf("  %d/%d  |", end, totalLines)
 	}
-	hint := dimStyle.Render(fmt.Sprintf("%s  %d items  |  ↑↓/jk scroll | JK by 10 | g/G top/bottom | ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
+	hint := dimStyle.Render(fmt.Sprintf("%s  %d items  |  ↑↓/jk scroll | g/G top/bottom | ←→ depth | f files | . hidden | i ignored | m format | c copy | S save | esc back",
 		scrollInfo, m.treeCount))
 	if m.flash != "" {
 		hint = dimStyle.Render(fmt.Sprintf("  %d items  |  ", m.treeCount)) + flashStyle.Render(m.flash)
@@ -1300,7 +1299,7 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{"Navigation", []helpEntry{
 			{"hjkl / ↑↓", "Move (l or → enters folder, h or ← goes back)"},
-			{"J/K or shift+↑↓", "Jump 10 items at a time"},
+			{"g", "Jump to top"},
 			{"~", "Jump to home directory"},
 		}},
 		{"Action", []helpEntry{
@@ -1323,7 +1322,6 @@ func helpSections() []helpSection {
 		}},
 		{"Tree mode", []helpEntry{
 			{"j/k or ↑↓", "Scroll one line"},
-			{"J/K or shift+↑↓", "Scroll 10 lines"},
 			{"g / G", "Top / bottom"},
 			{"←→", "Decrease/increase depth (0 → ∞ → 0)"},
 			{"f", "Toggle files vs folders only"},
@@ -1979,6 +1977,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err == nil {
 				m = m.navigateTo(home)
 			}
+		case "g":
+			m.cursor = 0
+			m.fixOffset()
 		case "/":
 			m.filtering = true
 			return m, nil
@@ -2245,7 +2246,7 @@ func (m model) View() string {
 			navLabel = dimStyle.Render("NAV")
 		}
 		statusLeft = navLabel +
-			dimStyle.Render("  hjkl/↑↓←→ | enter cd | ~ home | o open | R reveal | t tree | / find | , settings | q")
+			dimStyle.Render("  hjkl/↑↓←→ | enter cd | ~ home | g top | o open | R reveal | t tree | s sort | / find | , settings | q")
 	}
 
 	var rightParts []string
