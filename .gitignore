@@ -8,7 +8,7 @@ AGENTS.md
 docs/
 scripts/
 
-# assets: only push screenshot + showcase.mov; exclude source media
+# assets: only push screenshot + showcase.mp4; exclude source media
 assets/*
 !assets/screenshot.png
-!assets/showcase.mov
+!assets/showcase.mp4
