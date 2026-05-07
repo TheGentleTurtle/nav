@@ -6,6 +6,13 @@ A tiny terminal file navigator. Browse folders with vim keys, press enter, and y
 
 ![nav](assets/screenshot.png)
 
+<details>
+<summary><b>▶︎ Watch the demo</b></summary>
+
+<video src="https://github.com/TheGentleTurtle/nav/raw/main/assets/showcase.mov" controls width="100%"></video>
+
+</details>
+
 ## Install
 
 ### Homebrew

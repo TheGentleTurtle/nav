@@ -7,4 +7,8 @@ AGENTS.md
 .codex/
 docs/
 scripts/
-Assests
+
+# assets: only push screenshot + showcase.mov; exclude source media
+assets/*
+!assets/screenshot.png
+!assets/showcase.mov
