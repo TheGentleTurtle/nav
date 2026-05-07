@@ -7,7 +7,7 @@ A tiny terminal file navigator. Browse folders with vim keys, press enter, and y
 ![nav](assets/screenshot.png)
 
 <details>
-<summary><b>▶︎ Watch the demo</b></summary>
+<summary><b>Watch the demo</b></summary>
 
 ![nav demo](assets/showcase.gif)
 
