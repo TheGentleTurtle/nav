@@ -9,7 +9,7 @@ A tiny terminal file navigator. Browse folders with vim keys, press enter, and y
 <details>
 <summary><b>Watch the demo</b></summary>
 
-https://github.com/user-attachments/assets/1402a9b1-b16b-4086-90c9-db0901d4126d
+![nav demo](assets/showcase.gif)
 
 </details>
 
