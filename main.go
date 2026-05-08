@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.3.0"
+const version = "1.3.1"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -1933,15 +1933,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.fixOffset()
 		case "J", "shift+down":
-			m.cursor += 10
-			if m.cursor > m.totalItems()-1 {
-				m.cursor = m.totalItems() - 1
+			if total := m.totalItems(); total > 0 {
+				m.cursor = (m.cursor + 10) % total
 			}
 			m.fixOffset()
 		case "K", "shift+up":
-			m.cursor -= 10
-			if m.cursor < 0 {
-				m.cursor = 0
+			if total := m.totalItems(); total > 0 {
+				m.cursor = ((m.cursor-10)%total + total) % total
 			}
 			m.fixOffset()
 		case "l", "right":
