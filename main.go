@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.3.1"
+const version = "1.3.2"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -917,6 +917,17 @@ func revealInFinder(path string) error {
 	return exec.Command("open", "-R", path).Start()
 }
 
+// copyToClipboard writes s to the macOS clipboard via pbcopy.
+// pbcopy interprets stdin using LC_CTYPE/LANG; if those aren't UTF-8 it
+// transcodes bytes as Latin-1 and mangles non-ASCII (e.g. box-drawing
+// characters in tree output). Force a UTF-8 locale so bytes round-trip.
+func copyToClipboard(s string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Env = append(os.Environ(), "LC_CTYPE=UTF-8", "LANG=en_US.UTF-8")
+	cmd.Stdin = strings.NewReader(s)
+	return cmd.Run()
+}
+
 // --- Tree ---
 
 // Sanity cap so a stray tree of /System or similar doesn't lock up the UI.
@@ -1189,9 +1200,7 @@ func (m model) updateTree(key string) (tea.Model, tea.Cmd) {
 		m.rebuildTree()
 		return m, nil
 	case "c":
-		cmd := exec.Command("pbcopy")
-		cmd.Stdin = strings.NewReader(m.treeOutput)
-		if cmd.Run() == nil {
+		if copyToClipboard(m.treeOutput) == nil {
 			m.flash = "tree copied"
 			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return clearFlashMsg{} })
 		}
@@ -2023,9 +2032,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			if len(m.entries) > 0 && m.cursor < len(m.entries) {
 				target := filepath.Join(m.cwd, m.entries[m.cursor].Name())
-				cmd := exec.Command("pbcopy")
-				cmd.Stdin = strings.NewReader(target)
-				if cmd.Run() == nil {
+				if copyToClipboard(target) == nil {
 					m.flash = "copied!"
 					return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
 						return clearFlashMsg{}
