@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.3.2"
+const version = "1.3.3"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -33,6 +33,19 @@ nav() {
     cd "$dir"
   fi
 }
+# --- end nav ---`
+
+const fishWrapper = `# --- nav - terminal directory navigator ---
+function nav
+    if test (count $argv) -gt 0
+        command nav $argv
+        return
+    end
+    set -l dir (env NAV_WRAPPED=1 nav)
+    if test -n "$dir"; and test -d "$dir"
+        cd "$dir"
+    end
+end
 # --- end nav ---`
 
 const scrolloff = 3
@@ -105,9 +118,13 @@ More info: https://getnav.dev
 
 Shell wrapper:
   nav requires a shell wrapper to change directories.
-  Run 'nav --setup' or add this to your ~/.zshrc or ~/.bashrc:
+  Run 'nav --setup' or add this to your ~/.zshrc / ~/.bashrc:
 
 ` + shellWrapper + `
+
+  For fish, drop this into ~/.config/fish/functions/nav.fish:
+
+` + fishWrapper + `
 `
 
 // --- Styles (yazi-inspired) ---
@@ -441,15 +458,27 @@ func (m setupFlowModel) viewWrapper() string {
 
 func (m setupFlowModel) viewManual() string {
 	var b strings.Builder
+	shell := detectShell()
+	rc := detectShellRC()
 	b.WriteString("\n  Manual wrapper setup\n\n")
-	b.WriteString("  Add this to your ")
-	b.WriteString(detectShellRC())
-	b.WriteString(":\n\n")
-	b.WriteString(shellWrapper)
+	if shell == "fish" {
+		b.WriteString("  Save this as ")
+		b.WriteString(rc)
+		b.WriteString(":\n\n")
+	} else {
+		b.WriteString("  Add this to your ")
+		b.WriteString(rc)
+		b.WriteString(":\n\n")
+	}
+	b.WriteString(wrapperFor(shell))
 	b.WriteString("\n\n")
-	b.WriteString("  Then restart your terminal or run: source ")
-	b.WriteString(detectShellRC())
-	b.WriteString("\n\n")
+	if shell == "fish" {
+		b.WriteString("  Fish will auto-load the function on next use.\n\n")
+	} else {
+		b.WriteString("  Then restart your terminal or run: source ")
+		b.WriteString(rc)
+		b.WriteString("\n\n")
+	}
 	b.WriteString("  press enter to continue | esc to quit\n")
 	return b.String()
 }
@@ -2382,17 +2411,55 @@ func (m model) View() string {
 
 // --- Setup & CLI ---
 
-func detectShellRC() string {
+func detectShell() string {
 	shell := os.Getenv("SHELL")
-	home, _ := os.UserHomeDir()
-	if strings.Contains(shell, "zsh") {
-		return filepath.Join(home, ".zshrc")
+	switch {
+	case strings.Contains(shell, "fish"):
+		return "fish"
+	case strings.Contains(shell, "zsh"):
+		return "zsh"
+	default:
+		return "bash"
 	}
-	return filepath.Join(home, ".bashrc")
+}
+
+func detectShellRC() string {
+	home, _ := os.UserHomeDir()
+	switch detectShell() {
+	case "fish":
+		return filepath.Join(home, ".config", "fish", "functions", "nav.fish")
+	case "zsh":
+		return filepath.Join(home, ".zshrc")
+	default:
+		return filepath.Join(home, ".bashrc")
+	}
+}
+
+func wrapperFor(shell string) string {
+	if shell == "fish" {
+		return fishWrapper
+	}
+	return shellWrapper
 }
 
 func autoInstall() string {
+	shell := detectShell()
 	rcFile := detectShellRC()
+	wrapper := wrapperFor(shell)
+
+	if shell == "fish" {
+		if data, err := os.ReadFile(rcFile); err == nil && strings.Contains(string(data), "NAV_WRAPPED") {
+			return fmt.Sprintf("Wrapper already installed at %s", rcFile)
+		}
+		if err := os.MkdirAll(filepath.Dir(rcFile), 0755); err != nil {
+			return fmt.Sprintf("Could not create %s: %v", filepath.Dir(rcFile), err)
+		}
+		if err := os.WriteFile(rcFile, []byte(wrapper+"\n"), 0644); err != nil {
+			return fmt.Sprintf("Could not write %s: %v", rcFile, err)
+		}
+		return fmt.Sprintf("Wrapper written to %s", rcFile)
+	}
+
 	content, err := os.ReadFile(rcFile)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Sprintf("Could not read %s: %v", rcFile, err)
@@ -2405,7 +2472,7 @@ func autoInstall() string {
 		return fmt.Sprintf("Could not write to %s: %v", rcFile, err)
 	}
 	defer f.Close()
-	f.WriteString("\n\n" + shellWrapper + "\n")
+	f.WriteString("\n\n" + wrapper + "\n")
 	return fmt.Sprintf("Wrapper added to %s", rcFile)
 }
 
@@ -2450,6 +2517,7 @@ func removeWrapper() bool {
 		filepath.Join(home, ".bashrc"),
 		filepath.Join(home, ".bash_profile"),
 		filepath.Join(home, ".profile"),
+		filepath.Join(home, ".config", "fish", "config.fish"),
 	}
 	any := false
 	for _, rc := range candidates {
@@ -2463,8 +2531,18 @@ func removeWrapper() bool {
 			any = true
 		}
 	}
+	// Fish dedicated function file: delete outright if it's our wrapper.
+	fishFn := filepath.Join(home, ".config", "fish", "functions", "nav.fish")
+	if data, err := os.ReadFile(fishFn); err == nil && strings.Contains(string(data), "NAV_WRAPPED") {
+		if err := os.Remove(fishFn); err == nil {
+			fmt.Fprintf(os.Stderr, "  Removed shell wrapper from %s\n", fishFn)
+			any = true
+		} else {
+			fmt.Fprintf(os.Stderr, "  Could not remove %s: %v\n", fishFn, err)
+		}
+	}
 	if !any {
-		fmt.Fprintln(os.Stderr, "  No nav wrapper found in ~/.zshrc, ~/.bashrc, ~/.bash_profile, or ~/.profile")
+		fmt.Fprintln(os.Stderr, "  No nav wrapper found in ~/.zshrc, ~/.bashrc, ~/.bash_profile, ~/.profile, or ~/.config/fish/")
 	}
 	return any
 }

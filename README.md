@@ -65,6 +65,25 @@ nav() {
 
 Then restart your shell or run `source ~/.zshrc`.
 
+For **fish**, the setup writes a function to `~/.config/fish/functions/nav.fish`:
+
+```fish
+# --- nav - terminal directory navigator ---
+function nav
+    if test (count $argv) -gt 0
+        command nav $argv
+        return
+    end
+    set -l dir (env NAV_WRAPPED=1 nav)
+    if test -n "$dir"; and test -d "$dir"
+        cd "$dir"
+    end
+end
+# --- end nav ---
+```
+
+Fish auto-loads functions from that directory; no `source` step needed.
+
 ## Commands
 
 ```sh
