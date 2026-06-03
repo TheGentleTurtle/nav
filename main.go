@@ -15,7 +15,7 @@ import (
 	"github.com/sahilm/fuzzy"
 )
 
-const version = "1.3.3"
+const version = "1.3.4"
 
 func init() {
 	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
@@ -947,12 +947,17 @@ func revealInFinder(path string) error {
 }
 
 // copyToClipboard writes s to the macOS clipboard via pbcopy.
-// pbcopy interprets stdin using LC_CTYPE/LANG; if those aren't UTF-8 it
-// transcodes bytes as Latin-1 and mangles non-ASCII (e.g. box-drawing
-// characters in tree output). Force a UTF-8 locale so bytes round-trip.
+// pbcopy interprets stdin via the locale env vars. POSIX precedence is
+// LC_ALL > LC_CTYPE > LANG — so we must override LC_ALL, otherwise an
+// inherited non-POSIX LC_ALL (e.g. a CLDR identifier from macOS Settings)
+// makes pbcopy fall back to MacRoman and mangle UTF-8 box-drawing chars.
 func copyToClipboard(s string) error {
 	cmd := exec.Command("pbcopy")
-	cmd.Env = append(os.Environ(), "LC_CTYPE=UTF-8", "LANG=en_US.UTF-8")
+	cmd.Env = append(os.Environ(),
+		"LC_ALL=en_US.UTF-8",
+		"LC_CTYPE=UTF-8",
+		"LANG=en_US.UTF-8",
+	)
 	cmd.Stdin = strings.NewReader(s)
 	return cmd.Run()
 }
