@@ -1,8 +1,8 @@
 class Nav < Formula
   desc "Tiny terminal file navigator with vim keys"
   homepage "https://github.com/TheGentleTurtle/nav"
-  url "https://github.com/TheGentleTurtle/nav/archive/refs/tags/v1.3.2.tar.gz"
-  sha256 "c22d5c97607feba05b4352915cfa109c283531969d0107d8907da2ba09428611"
+  url "https://github.com/TheGentleTurtle/nav/archive/refs/tags/v1.3.3.tar.gz"
+  sha256 "ca52b0678f2c13c057146e90089ca107120510b755c5837cbd43eafc33df3962"
   license "CC-BY-NC-4.0"
 
   depends_on "go" => :build
